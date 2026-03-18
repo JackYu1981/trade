@@ -3,8 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import unittest
 
-from trade.analysis.baseline import build_trend_legs, find_swing_points, tradeable_legs
-from trade.models import LegCriteria, MarketBar
+from trade.analysis.baseline import (
+    build_trend_legs,
+    build_window_legs,
+    default_fish_window_config,
+    find_swing_points,
+    tradeable_legs,
+)
+from trade.models import FishWindowConfig, LegCriteria, MarketBar
 
 
 def make_wave_bars() -> list[MarketBar]:
@@ -52,6 +58,45 @@ class BaselineTests(unittest.TestCase):
         self.assertTrue(legs)
         self.assertTrue(any(leg.direction == "up" for leg in legs))
         self.assertTrue(any(leg.is_tradeable for leg in valid))
+
+    def test_window_legs_mark_tradeable_fish_on_15m_data(self) -> None:
+        start = datetime(2026, 1, 1, 0, 0)
+        bars: list[MarketBar] = []
+        for index in range(220):
+            close = 1.1000 + (0.00004 * index)
+            bars.append(
+                MarketBar(
+                    timestamp=start + timedelta(minutes=15 * index),
+                    symbol="EUR/USD",
+                    timeframe="15m",
+                    open=close - 0.0001,
+                    high=close + 0.0003,
+                    low=close - 0.0003,
+                    close=close,
+                    volume=1000 + index,
+                )
+            )
+
+        legs = build_window_legs(
+            bars,
+            FishWindowConfig(
+                window_bars=200,
+                min_move_points_by_timeframe={"15m": 65.0},
+                point_size=0.0001,
+            ),
+        )
+
+        self.assertTrue(legs)
+        self.assertTrue(all(leg.direction == "up" for leg in legs))
+        self.assertTrue(all(leg.move_points >= 65.0 for leg in legs))
+
+    def test_default_fish_window_config_contains_requested_thresholds(self) -> None:
+        config = default_fish_window_config()
+
+        self.assertEqual(config.window_bars, 200)
+        self.assertEqual(config.min_move_points_by_timeframe["15m"], 65.0)
+        self.assertEqual(config.min_move_points_by_timeframe["1h"], 150.0)
+        self.assertEqual(config.min_move_points_by_timeframe["1d"], 200.0)
 
 
 if __name__ == "__main__":

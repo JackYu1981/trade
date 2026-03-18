@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from trade.models import LegCriteria, MarketBar, SwingPoint, TrendLeg
+from trade.models import FishWindowConfig, LegCriteria, MarketBar, SwingPoint, TrendLeg
 
 
 def find_swing_points(bars: list[MarketBar], window: int) -> list[SwingPoint]:
@@ -53,6 +53,68 @@ def tradeable_legs(bars: list[MarketBar], criteria: LegCriteria) -> list[TrendLe
     return [leg for leg in build_trend_legs(bars, criteria) if leg.is_tradeable]
 
 
+def default_fish_window_config() -> FishWindowConfig:
+    return FishWindowConfig(
+        window_bars=200,
+        min_move_points_by_timeframe={
+            "15m": 65.0,
+            "1h": 150.0,
+            "1d": 200.0,
+        },
+        point_size=0.0001,
+    )
+
+
+def build_window_legs(
+    bars: list[MarketBar],
+    config: FishWindowConfig,
+) -> list[TrendLeg]:
+    if not bars:
+        return []
+    if config.window_bars <= 1:
+        raise ValueError("window_bars must be greater than 1")
+
+    timeframe = bars[0].timeframe
+    min_move_points = config.min_move_points_by_timeframe.get(timeframe)
+    if min_move_points is None:
+        raise ValueError(f"No fish-window threshold configured for timeframe: {timeframe}")
+
+    candidates: list[TrendLeg] = []
+    for start_index in range(0, len(bars) - config.window_bars + 1):
+        window = bars[start_index : start_index + config.window_bars]
+        low_offset, low_bar = min(enumerate(window), key=lambda item: item[1].low)
+        high_offset, high_bar = max(enumerate(window), key=lambda item: item[1].high)
+
+        if low_offset == high_offset:
+            continue
+
+        if low_offset < high_offset:
+            leg = _build_window_leg(
+                direction="up",
+                start_index=start_index + low_offset,
+                start_bar=low_bar,
+                end_index=start_index + high_offset,
+                end_bar=high_bar,
+                min_move_points=min_move_points,
+                point_size=config.point_size,
+            )
+        else:
+            leg = _build_window_leg(
+                direction="down",
+                start_index=start_index + high_offset,
+                start_bar=high_bar,
+                end_index=start_index + low_offset,
+                end_bar=low_bar,
+                min_move_points=min_move_points,
+                point_size=config.point_size,
+            )
+
+        if leg.is_tradeable:
+            candidates.append(leg)
+
+    return _deduplicate_window_legs(candidates)
+
+
 def _build_leg(start: SwingPoint, end: SwingPoint, direction: str, criteria: LegCriteria) -> TrendLeg:
     duration_bars = end.bar_index - start.bar_index
     move_price = abs(end.price - start.price)
@@ -98,3 +160,45 @@ def _compress_same_kind_points(points: list[SwingPoint]) -> list[SwingPoint]:
             compressed[-1] = point
 
     return compressed
+
+
+def _build_window_leg(
+    *,
+    direction: str,
+    start_index: int,
+    start_bar: MarketBar,
+    end_index: int,
+    end_bar: MarketBar,
+    min_move_points: float,
+    point_size: float,
+) -> TrendLeg:
+    start_price = start_bar.low if direction == "up" else start_bar.high
+    end_price = end_bar.high if direction == "up" else end_bar.low
+    move_points = abs(end_price - start_price) / point_size if point_size else abs(end_price - start_price)
+    return TrendLeg(
+        direction=direction,
+        start_index=start_index,
+        start_time=start_bar.timestamp,
+        start_price=start_price,
+        end_index=end_index,
+        end_time=end_bar.timestamp,
+        end_price=end_price,
+        extreme_index=end_index,
+        extreme_time=end_bar.timestamp,
+        extreme_price=end_price,
+        duration_bars=end_index - start_index,
+        move_points=move_points,
+        is_tradeable=move_points >= min_move_points,
+    )
+
+
+def _deduplicate_window_legs(legs: list[TrendLeg]) -> list[TrendLeg]:
+    deduped: list[TrendLeg] = []
+    seen: set[tuple[str, int, int]] = set()
+    for leg in legs:
+        key = (leg.direction, leg.start_index, leg.end_index)
+        if key in seen:
+            continue
+        deduped.append(leg)
+        seen.add(key)
+    return deduped

@@ -89,9 +89,9 @@ The framework now includes a first-pass ex-post market-leg baseline for post-tra
 
 - it does not try to confirm breakouts in real time
 - it scans full historical data after the fact
-- it marks swing highs and swing lows
-- it builds candidate trend legs from alternating swings
-- it filters those legs by configurable move size and duration
+- it can mark candidate legs from swing structure
+- it can also mark a simpler "fish" by scanning a fixed `200`-bar window
+- it filters those fish legs by timeframe-specific move thresholds
 
 This is intended to support questions such as:
 
@@ -105,12 +105,19 @@ Core objects:
 - `SwingPoint`
 - `TrendLeg`
 - `LegCriteria`
+- `FishWindowConfig`
 
 Current implementation lives in [src/trade/analysis/baseline.py](/Users/I064337/ai/codex/trade/src/trade/analysis/baseline.py).
 
 Key design rule:
 
 - move thresholds and duration thresholds are configurable research inputs, not hard-coded truths
+
+Current simplified fish-window defaults:
+
+- `15m`: `200` bars, minimum move `65` points
+- `1h`: `200` bars, minimum move `150` points
+- `1d`: `200` bars, minimum move `200` points
 
 Primary planning documents:
 

@@ -86,6 +86,13 @@ class TrendLeg:
 
 
 @dataclass(frozen=True)
+class FishWindowConfig:
+    window_bars: int
+    min_move_points_by_timeframe: dict[str, float]
+    point_size: float = 0.0001
+
+
+@dataclass(frozen=True)
 class Trade:
     side: str
     entry_time: datetime
