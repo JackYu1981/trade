@@ -1,0 +1,1 @@
+"""Single-position backtest simulation."""

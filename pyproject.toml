@@ -1,0 +1,9 @@
+[project]
+name = "trade"
+version = "0.1.0"
+description = "Library-first research framework for rule-based trading strategy analysis"
+requires-python = ">=3.14"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"

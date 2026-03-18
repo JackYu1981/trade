@@ -1,73 +1,163 @@
 # Trade
 
-A modular research platform for developing, testing, and analyzing rule-based trading strategies across financial markets.
+Trade is a research framework for rule-based trading strategy analysis across financial markets.
 
-## Overview
-
-Trade is a research-oriented platform designed for systematic trading strategy analysis.  
-The goal of the project is to provide a flexible environment for building, testing, and analyzing rule-based trading strategies.
-
-Unlike execution-focused trading tools, this project focuses on **strategy research, decision transparency, and backtesting analysis**.
+The project is library-first. It is intended to support historical data preparation, indicator computation, rule evaluation, strategy composition, backtesting, and analysis, with a thin CLI now and room for API integration later.
 
 ## Design Goals
 
-- Modular rule-based strategy composition
-- Transparent strategy decision logic
-- Research-grade backtesting
-- Strategy diagnostics and analysis
-- Extensible architecture for future web/API integration
+- Keep the framework separate from private strategy implementations
+- Make rule evaluation inspectable and explainable
+- Support incremental research through a small, testable core
+- Preserve a clean path to future API or service integration
 
-## Supported Markets (Planned)
+## Supported Markets
 
-The platform is designed to support multiple financial markets, including:
+Planned market coverage:
 
 - Forex
 - Crypto
 - Equities
 - Futures
-- Other time-series financial datasets
+- Other structured financial time-series datasets
+
+Initial research focus:
+
+- market: Forex
+- instrument: EUR/USD
+- primary timeframe: 1h
+- secondary timeframes: 15m and 1d
+
+## Repository Structure
+
+Target high-level layout:
+
+```text
+src/
+    trade/
+        data/
+        indicators/
+        rules/
+        strategy_engine/
+        backtest/
+        analysis/
+        reporting/
+
+tests/
+configs/
+examples/
+```
+
+Private strategy implementations are expected to live outside this public framework or in ignored local directories.
 
 ## Project Status
 
-🚧 Early development.
+Status: milestone 1 implementation in progress with a runnable minimal vertical slice.
 
-Current milestone focuses on building the core research framework:
+Current vertical slice:
 
-- Data ingestion
-- Indicator computation
-- Rule evaluation system
-- Strategy composition
-- Backtesting engine
-- Research reporting
+- load normalized OHLCV data from CSV
+- compute arithmetic moving averages (`MA`, not `SMA`)
+- evaluate reusable rules with structured traces
+- compose strategies as pluggable rule collections
+- run a single-position backtest
+- emit text or JSON reports with review suggestions
+- support multi-timeframe MA preparation for `15m`, `1h`, `4h`, and `1d`
+- support strategy registration so public example strategies stay separate from framework execution
 
-## Repository Structure (Planned)
+Current strategy skeleton:
 
-trade/
+- execution timeframe: `15m`
+- higher-timeframe trend filters: `1h`, `4h`, `1d`
+- MA stack: `MA20 > MA60 > MA240`
+- entry concept: `15m` close crosses above `15m MA20` while higher-timeframe stacks remain bullish
+- exit concept: `15m` close falls below `15m MA20` or execution-timeframe MA stack breaks
 
-src/  
-Core research engine and main Python package.
+## Framework Direction
 
-tests/  
-Unit and integration tests.
+The framework is being shaped around collaborative strategy research rather than a fixed end-user UI.
 
-configs/  
-Strategy configuration files.
+- framework modules handle data, indicators, rules, backtests, analysis, and reporting
+- strategies are expected to be pluggable extensions
+- rules are also expected to be reusable building blocks that strategies compose
+- rule collections are expected to be organized by lifecycle stage: `trend`, `entry`, `exit`, and `add`
+- AI agents and users can iterate on strategy definitions, run tests, inspect blocked reasons, and refine rules together
 
-data/  
-Datasets and experiment outputs (not tracked in git).
+## Ex-Post Baseline
 
-spec.md  
-Project specification.
+The framework now includes a first-pass ex-post market-leg baseline for post-trade comparison.
 
-plans.md  
-Implementation plan.
+- it does not try to confirm breakouts in real time
+- it scans full historical data after the fact
+- it marks swing highs and swing lows
+- it builds candidate trend legs from alternating swings
+- it filters those legs by configurable move size and duration
 
-pyproject.toml  
-Python project configuration.
+This is intended to support questions such as:
 
-README.md  
-Project overview and documentation.
+- why did the strategy enter when it should not have entered
+- why did the strategy fail to enter when it should have entered
+- why did the strategy exit when it should not have exited
+- why did the strategy fail to exit when it should have exited
 
-## License
+Core objects:
 
-MIT Licen
+- `SwingPoint`
+- `TrendLeg`
+- `LegCriteria`
+
+Current implementation lives in [src/trade/analysis/baseline.py](/Users/I064337/ai/codex/trade/src/trade/analysis/baseline.py).
+
+Key design rule:
+
+- move thresholds and duration thresholds are configurable research inputs, not hard-coded truths
+
+Primary planning documents:
+
+- `spec.md` for system architecture and responsibilities
+- `plans.md` for milestone roadmap
+
+## Current Layout
+
+```text
+src/
+    trade/
+        analysis/
+        backtest/
+        data/
+        indicators/
+        reporting/
+        rules/
+        strategy_engine/
+
+tests/
+examples/
+```
+
+## Quick Start
+
+The current milestone implementation uses only the Python standard library.
+
+Run the test suite:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+```
+
+Run the demo backtest:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_1h_demo.csv --symbol EUR/USD --timeframe 1h --ma-periods 3 --execution-timeframe 1h --fast-period 3 --mid-period 3 --slow-period 3 --trend-timeframes 4h,1d
+```
+
+Run the default multi-timeframe MA skeleton on the long `15m` fixture:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_15m_long_demo.csv --symbol EUR/USD --timeframe 15m
+```
+
+Get compact JSON analysis for agent workflows:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_15m_long_demo.csv --symbol EUR/USD --timeframe 15m --format json
+```
