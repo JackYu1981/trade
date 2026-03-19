@@ -4,10 +4,10 @@ import json
 from dataclasses import asdict
 
 from trade.analysis.summary import analyze_backtest, curve_series
-from trade.models import BacktestAnalysis, BacktestResult
+from trade.models import BacktestAnalysis, BacktestResult, DataQualityReport
 
 
-def render_text_report(result: BacktestResult) -> str:
+def render_text_report(result: BacktestResult, data_quality_report: DataQualityReport | None = None) -> str:
     analysis = analyze_backtest(result)
     summary = analysis.summary
     lines = [
@@ -34,8 +34,13 @@ def render_text_report(result: BacktestResult) -> str:
         f"- Underwater start/end: {analysis.curve_metrics['underwater_curve_start']} -> {analysis.curve_metrics['underwater_curve_end']}",
         f"- Max drawdown duration bars: {analysis.curve_metrics['max_drawdown_duration_bars']}",
         "",
-        "Review:",
+        "Data Quality:",
     ]
+    lines.extend(_render_data_quality_lines(data_quality_report))
+    lines.extend([
+        "",
+        "Review:",
+    ])
     lines.extend(_render_review_lines(analysis))
     lines.extend([
         "",
@@ -59,6 +64,7 @@ def render_text_report(result: BacktestResult) -> str:
 def render_json_report(
     result: BacktestResult,
     *,
+    data_quality_report: DataQualityReport | None = None,
     include_decisions: bool = False,
     include_equity_curve: bool = False,
 ) -> str:
@@ -71,6 +77,7 @@ def render_json_report(
             "top_blocked_reasons": analysis.top_blocked_reasons,
             "suggestions": analysis.suggestions,
         },
+        "data_quality": _data_quality_payload(data_quality_report),
         "trades": [asdict(trade) for trade in result.trades],
     }
     if include_decisions:
@@ -88,6 +95,33 @@ def _render_review_lines(analysis: BacktestAnalysis) -> list[str]:
     for suggestion in analysis.suggestions:
         lines.append(f"- Suggestion: {suggestion}")
     return lines
+
+
+def _render_data_quality_lines(report: DataQualityReport | None) -> list[str]:
+    if report is None:
+        return ["- No data quality report available"]
+
+    lines = [
+        f"- Bars: {report.bar_count}",
+        f"- Normalized symbol/timeframe: {report.symbol} / {report.timeframe}",
+    ]
+    if report.issues:
+        for issue in report.issues:
+            lines.append(f"- {issue.severity.upper()} {issue.code}: {issue.message}")
+    else:
+        lines.append("- No issues detected")
+    return lines
+
+
+def _data_quality_payload(report: DataQualityReport | None) -> dict[str, object] | None:
+    if report is None:
+        return None
+    return {
+        "symbol": report.symbol,
+        "timeframe": report.timeframe,
+        "bar_count": report.bar_count,
+        "issues": [asdict(issue) for issue in report.issues],
+    }
 
 
 def _format_ratio(value: float | int | str) -> str:

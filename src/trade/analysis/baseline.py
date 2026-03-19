@@ -80,12 +80,15 @@ def build_window_legs(
         raise ValueError(f"No fish-window threshold configured for timeframe: {timeframe}")
 
     candidates: list[TrendLeg] = []
-    for start_index in range(0, len(bars) - config.window_bars + 1):
+    start_index = 0
+    last_start = len(bars) - config.window_bars
+    while start_index <= last_start:
         window = bars[start_index : start_index + config.window_bars]
         low_offset, low_bar = min(enumerate(window), key=lambda item: item[1].low)
         high_offset, high_bar = max(enumerate(window), key=lambda item: item[1].high)
 
         if low_offset == high_offset:
+            start_index += 1
             continue
 
         if low_offset < high_offset:
@@ -111,6 +114,9 @@ def build_window_legs(
 
         if leg.is_tradeable:
             candidates.append(leg)
+            start_index = leg.end_index + 1
+        else:
+            start_index += 1
 
     return _deduplicate_window_legs(candidates)
 

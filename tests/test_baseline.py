@@ -98,6 +98,37 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(config.min_move_points_by_timeframe["1h"], 150.0)
         self.assertEqual(config.min_move_points_by_timeframe["1d"], 200.0)
 
+    def test_window_legs_do_not_overlap_after_first_tradeable_fish(self) -> None:
+        start = datetime(2026, 1, 1, 0, 0)
+        bars: list[MarketBar] = []
+        for index in range(420):
+            close = 1.1000 + (0.00005 * index)
+            bars.append(
+                MarketBar(
+                    timestamp=start + timedelta(minutes=15 * index),
+                    symbol="EUR/USD",
+                    timeframe="15m",
+                    open=close - 0.0001,
+                    high=close + 0.0002,
+                    low=close - 0.0002,
+                    close=close,
+                    volume=1000 + index,
+                )
+            )
+
+        legs = build_window_legs(
+            bars,
+            FishWindowConfig(
+                window_bars=200,
+                min_move_points_by_timeframe={"15m": 65.0},
+                point_size=0.0001,
+            ),
+        )
+
+        self.assertGreaterEqual(len(legs), 2)
+        for left, right in zip(legs, legs[1:]):
+            self.assertLess(left.end_index, right.start_index)
+
 
 if __name__ == "__main__":
     unittest.main()

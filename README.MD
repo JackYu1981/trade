@@ -57,6 +57,9 @@ Status: milestone 1 implementation in progress with a runnable minimal vertical 
 Current vertical slice:
 
 - load normalized OHLCV data from CSV
+- download real historical data through pluggable providers
+- normalize symbol and timeframe inputs before research execution
+- inspect imported bars for data-quality issues before backtests
 - compute arithmetic moving averages (`MA`, not `SMA`)
 - evaluate reusable rules with structured traces
 - compose strategies as pluggable rule collections
@@ -78,6 +81,7 @@ Current strategy skeleton:
 The framework is being shaped around collaborative strategy research rather than a fixed end-user UI.
 
 - framework modules handle data, indicators, rules, backtests, analysis, and reporting
+- market-data providers are expected to be pluggable so public adapters can grow without changing core consumers
 - strategies are expected to be pluggable extensions
 - rules are also expected to be reusable building blocks that strategies compose
 - rule collections are expected to be organized by lifecycle stage: `trend`, `entry`, `exit`, and `add`
@@ -143,7 +147,26 @@ examples/
 
 ## Quick Start
 
-The current milestone implementation uses only the Python standard library.
+The current milestone implementation keeps the core backtest slice lightweight, with `yfinance` added for real historical data ingestion.
+
+Note:
+
+- real-data download now uses `yfinance`, so `requirements.txt` is no longer standard-library-only
+- the download entrypoint is provider-driven and keeps canonical CSV output stable across providers
+
+Current download architecture:
+
+- `DownloadRequest` defines provider, symbol, timeframe, and time scope
+- `LiveDataRequest` and `MarketSnapshot` define the separate realtime contract
+- `CachePolicy` controls local cache directory and refresh behavior
+- `ProviderSettings` carries symbol mapping, interval mapping, credentials, and provider-specific extra parameters
+- `download_market_data(...)` orchestrates provider execution and canonical CSV output
+- provider metadata is carried by `ProviderSpec` and `ProviderCapabilities`
+- `yfinance` is the first historical provider; future providers such as `tushare`, `akshare`, or broker streams can plug into the same interface
+- historical download and realtime quote access are intentionally separated so future signal generation does not distort the backtest ingestion path
+- imported bars are normalized through shared symbol/timeframe standards and can be checked with the data-quality inspector
+- CLI and JSON reports include data-quality context so import problems are visible before strategy conclusions are trusted
+- static HTML reporting is available for readable backtest review, including candlestick charts, trade markers, KPI cards, and equity curves
 
 Run the test suite:
 
@@ -168,3 +191,58 @@ Get compact JSON analysis for agent workflows:
 ```bash
 PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_15m_long_demo.csv --symbol EUR/USD --timeframe 15m --format json
 ```
+
+Generate a static HTML report:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_1h_demo.csv --symbol EURUSD=X --timeframe 60min --format html
+```
+
+Download real Yahoo Finance history to normalized CSV:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.data.download_cli EURUSD=X examples/eurusd_15m_yf.csv --interval 15m --period 60d
+```
+
+Download a fixed historical range and reuse local cache on later runs:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.data.download_cli EURUSD=X examples/eurusd_1h_2025.csv --interval 1h --start 2025-01-01 --end 2025-03-31
+```
+
+Refresh cache explicitly:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.data.download_cli EURUSD=X --interval 15m --period 60d --refresh-cache
+```
+
+Apply provider-side symbol or interval mapping from the CLI:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.data.download_cli EURUSD --provider akshare --interval 1h --start 2025-01-01 --end 2025-03-31 --symbol-map EURUSD=FX_EURUSD --interval-map 1h=60m --provider-option market=forex
+```
+
+List currently registered download providers:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.data.download_cli --list-providers
+```
+
+List providers with capability details:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.data.download_cli --list-providers --verbose-providers
+```
+
+The downloaded CSV uses the same canonical columns as local demo data:
+
+```text
+timestamp,open,high,low,close,volume
+```
+
+Planned provider evolution:
+
+- `yfinance`: public historical adapter for development and smoke validation
+- `tushare`: credential-backed historical provider with provider-specific symbol and frequency mapping
+- `akshare`: free/public China-market oriented provider with mapping and normalization hooks
+- broker or market-data stream providers: separate realtime implementations that return `MarketSnapshot`

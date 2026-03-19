@@ -18,6 +18,22 @@ class MarketBar:
 
 
 @dataclass(frozen=True)
+class DataQualityIssue:
+    code: str
+    severity: str
+    count: int
+    message: str
+
+
+@dataclass(frozen=True)
+class DataQualityReport:
+    symbol: str
+    timeframe: str
+    bar_count: int
+    issues: list[DataQualityIssue]
+
+
+@dataclass(frozen=True)
 class RuleResult:
     rule_id: str
     passed: bool
