@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import timedelta
 from html import escape
 import json
 
@@ -14,6 +15,11 @@ from trade.models import BacktestResult, DataQualityReport, MarketBar
 
 DEFAULT_VISIBLE_BAR_COUNT = 60
 DEFAULT_PRICE_RANGE_MULTIPLIER = 3.0
+DISPLAY_TIMEZONE_OFFSET_HOURS = 8
+
+
+def _strategy_display_name(strategy_id: str) -> str:
+    return strategy_id.split(".", 1)[0] if "." in strategy_id else strategy_id
 
 
 def render_html_report(
@@ -62,7 +68,9 @@ def render_html_report(
     ) or "<li>No blocked reasons recorded</li>"
     data_quality_html = _data_quality_list(data_quality_report)
     json_payload = escape(json.dumps(payload, indent=2, default=str))
-    chart_html = _render_plotly_chart(result, bars)
+    display_bars = [_display_bar(bar) for bar in bars]
+    chart_html = _render_plotly_chart(result, bars, display_bars)
+    equity_chart_html = _render_equity_chart(result, display_bars)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -160,6 +168,15 @@ def render_html_report(
       overflow: hidden;
       position: relative;
     }}
+    .equity-shell {{
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 8px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,244,236,0.92));
+      overflow: hidden;
+      position: relative;
+    }}
     .chart-toolbar {{
       position: absolute;
       top: 18px;
@@ -176,8 +193,8 @@ def render_html_report(
     }}
     .chart-hover-readout {{
       position: absolute;
-      top: 36px;
-      left: 104px;
+      top: 0;
+      left: 0;
       z-index: 3;
       pointer-events: none;
       display: flex;
@@ -189,20 +206,20 @@ def render_html_report(
       line-height: 1.28;
     }}
     .chart-hover-readout .hover-title {{
-      color: #2563eb;
+      color: inherit;
       font-size: 10px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }}
     .chart-hover-readout .hover-line {{
-      color: #1d4ed8;
+      color: inherit;
       font-weight: 600;
       font-size: 12px;
     }}
     .chart-hover-readout .hover-values {{
       display: flex;
       gap: 18px;
-      color: #1d4ed8;
+      color: inherit;
       font-weight: 600;
     }}
     .chart-hover-readout .hover-values span {{
@@ -256,11 +273,70 @@ def render_html_report(
     }}
     .chart-selection-overlay {{
       position: absolute;
-      border: 1.5px dashed rgba(15, 118, 110, 0.95);
       background: transparent;
       pointer-events: none;
       z-index: 2;
       display: none;
+      inset: 0;
+    }}
+    .chart-selection-line {{
+      position: absolute;
+      display: none;
+      pointer-events: none;
+      background-repeat: repeat;
+    }}
+    .chart-selection-line.vertical {{
+      width: 1px;
+      background-image: var(--selection-vertical-stroke, repeating-linear-gradient(
+        to bottom,
+        rgba(15, 118, 110, 0.95) 0 8px,
+        transparent 8px 14px
+      ));
+    }}
+    .chart-selection-line.horizontal {{
+      height: 1px;
+      background-image: var(--selection-horizontal-stroke, repeating-linear-gradient(
+        to right,
+        rgba(15, 118, 110, 0.95) 0 8px,
+        transparent 8px 14px
+      ));
+    }}
+    .chart-crosshair-line {{
+      position: absolute;
+      pointer-events: none;
+      z-index: 2;
+      display: none;
+      background-repeat: repeat;
+    }}
+    .chart-crosshair-line.x {{
+      height: 1px;
+      background-image: repeating-linear-gradient(
+        to right,
+        rgba(37, 99, 235, 0.65) 0 9px,
+        transparent 9px 15px
+      );
+    }}
+    .chart-crosshair-line.y {{
+      width: 1px;
+      background-image: repeating-linear-gradient(
+        to bottom,
+        rgba(37, 99, 235, 0.65) 0 9px,
+        transparent 9px 15px
+      );
+    }}
+    .chart-axis-label {{
+      position: absolute;
+      z-index: 3;
+      pointer-events: none;
+      display: none;
+      padding: 2px 6px;
+      border-radius: 8px;
+      background: rgba(255, 253, 248, 0.96);
+      border: 1px solid rgba(37, 99, 235, 0.22);
+      color: #1d4ed8;
+      font-size: 11px;
+      line-height: 1.1;
+      white-space: nowrap;
     }}
     .chart-interaction-layer {{
       position: absolute;
@@ -268,7 +344,10 @@ def render_html_report(
       display: none;
       background: transparent;
     }}
-    .js-plotly-plot .plotly .hoverlayer {{
+    .js-plotly-plot .plotly .hoverlayer .hovertext {{
+      display: none;
+    }}
+    .js-plotly-plot .plotly .hoverlayer .axistext {{
       display: none;
     }}
     ul {{
@@ -316,7 +395,7 @@ def render_html_report(
   <main>
     <section class="hero">
       <div class="eyebrow">Research Report</div>
-      <h1>{escape(str(summary['strategy_id']))}</h1>
+      <h1>{escape(_strategy_display_name(str(summary['strategy_id'])))}</h1>
       <div class="subtle">{escape(str(summary['symbol']))} · {escape(str(summary['timeframe']))} · demo strategy used to validate report readability</div>
       <div class="grid">
         {"".join(f'<div class="card"><div class="label">{escape(label)}</div><div class="value">{escape(value)}</div></div>' for label, value in summary_cards)}
@@ -361,9 +440,21 @@ def render_html_report(
           <strong>Selection</strong>
           <div class="empty">Use Box Select to inspect bar count and price range.</div>
         </div>
+        <div id="chart-crosshair-x" class="chart-crosshair-line x" aria-hidden="true"></div>
+        <div id="chart-crosshair-y" class="chart-crosshair-line y" aria-hidden="true"></div>
+        <div id="chart-crosshair-x-label" class="chart-axis-label" aria-hidden="true"></div>
+        <div id="chart-crosshair-y-label" class="chart-axis-label" aria-hidden="true"></div>
         <div id="chart-interaction-layer" class="chart-interaction-layer" aria-hidden="true"></div>
-        <div id="chart-selection-overlay" class="chart-selection-overlay" aria-hidden="true"></div>
+        <div id="chart-selection-overlay" class="chart-selection-overlay" aria-hidden="true">
+          <div class="chart-selection-line vertical" data-edge="left"></div>
+          <div class="chart-selection-line vertical" data-edge="right"></div>
+          <div class="chart-selection-line horizontal" data-edge="top"></div>
+          <div class="chart-selection-line horizontal" data-edge="bottom"></div>
+        </div>
         {chart_html}
+      </div>
+      <div class="equity-shell">
+        {equity_chart_html}
       </div>
     </section>
 
@@ -413,11 +504,13 @@ def render_html_report(
 """
 
 
-def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
+def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_bars: list[MarketBar]) -> str:
     fish_legs = build_window_legs(bars, default_fish_window_config())
     ma60_values = moving_average(bars, period=60)
-    visible_bars = bars[-DEFAULT_VISIBLE_BAR_COUNT:] if len(bars) > DEFAULT_VISIBLE_BAR_COUNT else bars
-    visible_times = [bar.timestamp for bar in visible_bars]
+    bar_indices = list(range(len(display_bars)))
+    timestamp_labels = [_display_label(bar.timestamp) for bar in display_bars]
+    original_index_by_timestamp = {bar.timestamp.isoformat(): index for index, bar in enumerate(bars)}
+    visible_bars = display_bars[-DEFAULT_VISIBLE_BAR_COUNT:] if len(display_bars) > DEFAULT_VISIBLE_BAR_COUNT else display_bars
     visible_lows = [bar.low for bar in visible_bars]
     visible_highs = [bar.high for bar in visible_bars]
     y_min = min(visible_lows) if visible_lows else 0.0
@@ -425,23 +518,23 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
     visible_span = max(y_max - y_min, 0.0005)
     padded_span = max(visible_span * DEFAULT_PRICE_RANGE_MULTIPLIER, 0.005)
     y_mid = (y_max + y_min) / 2
-    initial_x_range = [visible_times[0], visible_times[-1]] if visible_times else None
+    visible_start_index = max(0, len(display_bars) - len(visible_bars))
+    initial_x_range = [visible_start_index - 0.5, len(display_bars) - 0.5] if display_bars else None
     initial_y_range = [y_mid - (padded_span / 2), y_mid + (padded_span / 2)]
     figure = go.Figure()
-
-    timestamps = [bar.timestamp for bar in bars]
     figure.add_trace(
         go.Candlestick(
-            x=timestamps,
-            open=[bar.open for bar in bars],
-            high=[bar.high for bar in bars],
-            low=[bar.low for bar in bars],
-            close=[bar.close for bar in bars],
+            x=bar_indices,
+            open=[bar.open for bar in display_bars],
+            high=[bar.high for bar in display_bars],
+            low=[bar.low for bar in display_bars],
+            close=[bar.close for bar in display_bars],
+            customdata=timestamp_labels,
             name="Price",
             increasing_line_color="#166534",
             decreasing_line_color="#b91c1c",
             hovertemplate=(
-                "%{x|%Y-%m-%d %H:%M}<br>"
+                "%{customdata}<br>"
                 "Open=%{open:.5f}<br>"
                 "High=%{high:.5f}<br>"
                 "Low=%{low:.5f}<br>"
@@ -452,38 +545,42 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
 
     for leg in fish_legs:
         figure.add_vrect(
-            x0=leg.start_time,
-            x1=leg.end_time,
+            x0=leg.start_index - 0.5,
+            x1=leg.end_index + 0.5,
             fillcolor="rgba(22, 163, 74, 0.10)" if leg.direction == "up" else "rgba(220, 38, 38, 0.10)",
             line_width=0,
             layer="below",
         )
 
     if result.trades:
+        entry_indices = [original_index_by_timestamp[trade.entry_time.isoformat()] for trade in result.trades]
+        exit_indices = [original_index_by_timestamp[trade.exit_time.isoformat()] for trade in result.trades]
         figure.add_trace(
             go.Scatter(
-                x=[trade.entry_time for trade in result.trades],
+                x=entry_indices,
                 y=[trade.entry_price for trade in result.trades],
                 mode="markers",
                 name="Entries",
                 marker={"size": 10, "color": "#0f766e", "symbol": "triangle-up"},
-                hovertemplate="Entry<br>%{x|%Y-%m-%d %H:%M}<br>Price=%{y:.5f}<extra></extra>",
+                customdata=[timestamp_labels[index] for index in entry_indices],
+                hovertemplate="Entry<br>%{customdata}<br>Price=%{y:.5f}<extra></extra>",
             ),
         )
         figure.add_trace(
             go.Scatter(
-                x=[trade.exit_time for trade in result.trades],
+                x=exit_indices,
                 y=[trade.exit_price for trade in result.trades],
                 mode="markers",
                 name="Exits",
                 marker={"size": 10, "color": "#b91c1c", "symbol": "triangle-down"},
-                hovertemplate="Exit<br>%{x|%Y-%m-%d %H:%M}<br>Price=%{y:.5f}<extra></extra>",
+                customdata=[timestamp_labels[index] for index in exit_indices],
+                hovertemplate="Exit<br>%{customdata}<br>Price=%{y:.5f}<extra></extra>",
             ),
         )
 
     figure.add_trace(
         go.Scatter(
-            x=timestamps,
+            x=bar_indices,
             y=ma60_values,
             mode="lines",
             name="MA60",
@@ -511,19 +608,21 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         autorange=False,
         showspikes=True,
         spikemode="across",
+        spikethickness=1,
+        spikecolor="rgba(37, 99, 235, 0.65)",
         range=initial_y_range,
     )
     figure.update_xaxes(
         showticklabels=True,
-        type="date",
-        tickformat="%Y-%m-%d\n%H:%M",
-        hoverformat="%Y-%m-%d %H:%M",
+        type="linear",
         ticks="outside",
         automargin=True,
         autorange=False,
         showspikes=True,
         spikemode="across",
-        rangebreaks=[{"bounds": ["sat", "mon"]}],
+        spikethickness=1,
+        spikecolor="rgba(37, 99, 235, 0.65)",
+        rangeslider={"visible": False},
         range=initial_x_range,
     )
     post_script = """
@@ -531,12 +630,21 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         const gd = document.getElementById('{plot_id}');
       const summary = document.getElementById('selection-summary');
       const hoverReadout = document.getElementById('chart-hover-readout');
+      const crosshairX = document.getElementById('chart-crosshair-x');
+      const crosshairY = document.getElementById('chart-crosshair-y');
+      const crosshairXLabel = document.getElementById('chart-crosshair-x-label');
+      const crosshairYLabel = document.getElementById('chart-crosshair-y-label');
       const panButton = document.getElementById('chart-tool-pan');
       const selectButton = document.getElementById('chart-tool-select');
       const zoomButton = document.getElementById('chart-tool-zoom');
       const homeButton = document.getElementById('chart-tool-home');
       const interactionLayer = document.getElementById('chart-interaction-layer');
       const selectionOverlay = document.getElementById('chart-selection-overlay');
+      const selectionLeftEdge = selectionOverlay ? selectionOverlay.querySelector('[data-edge="left"]') : null;
+      const selectionRightEdge = selectionOverlay ? selectionOverlay.querySelector('[data-edge="right"]') : null;
+      const selectionTopEdge = selectionOverlay ? selectionOverlay.querySelector('[data-edge="top"]') : null;
+      const selectionBottomEdge = selectionOverlay ? selectionOverlay.querySelector('[data-edge="bottom"]') : null;
+      const chartShell = gd.closest('.chart-shell');
       if (!gd) {
         return;
       }
@@ -546,11 +654,12 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
       let selectedBox = null;
       let toolMode = 'pan';
       const bars = %s;
-      const barTimes = bars.map((bar) => new Date(bar.timestamp).getTime());
-      const initialLeft = new Date(%s).getTime();
-      const initialRight = new Date(%s).getTime();
+      const timestampLabels = bars.map((bar) => bar.timestamp);
+      const initialLeft = %s;
+      const initialRight = %s;
       const initialBottom = %s;
       const initialTop = %s;
+      const selectionDragColor = 'rgba(37, 99, 235, 0.95)';
       const selectionSummaryDefault = '<strong>Selection</strong><div class="empty">Use Box Select to inspect bar count and price range.</div>';
       const hoverReadoutDefault = "<div class='hover-line'>&nbsp;</div>";
 
@@ -582,9 +691,10 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
 
       function relayoutXRange(nextLeft, nextRight) {
         Plotly.relayout(gd, {
-          'xaxis.range': [new Date(nextLeft).toISOString(), new Date(nextRight).toISOString()],
+          'xaxis.range': [nextLeft, nextRight],
           selections: []
         });
+        updateAxisTicks(gd, nextLeft, nextRight);
       }
 
       function relayoutYRange(nextBottom, nextTop) {
@@ -597,13 +707,14 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
       function resetView() {
         Plotly.relayout(gd, {
           dragmode: 'pan',
-          'xaxis.range': [new Date(initialLeft).toISOString(), new Date(initialRight).toISOString()],
+          'xaxis.range': [initialLeft, initialRight],
           'yaxis.range': [initialBottom, initialTop],
           selections: []
         });
         hideSelectionSummary();
         clearSelectionOverlay();
         setActiveButton('pan');
+        updateAxisTicks(gd, initialLeft, initialRight);
       }
 
       function clearSelectionOverlay() {
@@ -614,6 +725,11 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
           selectionOverlay.style.width = '0px';
           selectionOverlay.style.height = '0px';
         }
+        for (const edge of [selectionLeftEdge, selectionRightEdge, selectionTopEdge, selectionBottomEdge]) {
+          if (edge) {
+            edge.style.display = 'none';
+          }
+        }
         hideSelectionSummary();
       }
 
@@ -623,6 +739,31 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         }
         summary.style.display = 'none';
         summary.innerHTML = selectionSummaryDefault;
+      }
+
+      function selectionColorForRange(startIndex, endIndex) {
+        const startBar = bars[Math.min(startIndex, endIndex)];
+        const endBar = bars[Math.max(startIndex, endIndex)];
+        if (!startBar || !endBar) {
+          return 'rgba(15, 118, 110, 0.95)';
+        }
+        return endBar.close >= startBar.close
+          ? 'rgba(22, 163, 74, 0.95)'
+          : 'rgba(220, 38, 38, 0.95)';
+      }
+
+      function updateSelectionStrokeColor(color) {
+        if (!selectionOverlay) {
+          return;
+        }
+        selectionOverlay.style.setProperty(
+          '--selection-vertical-stroke',
+          'repeating-linear-gradient(to bottom, ' + color + ' 0 8px, transparent 8px 14px)'
+        );
+        selectionOverlay.style.setProperty(
+          '--selection-horizontal-stroke',
+          'repeating-linear-gradient(to right, ' + color + ' 0 8px, transparent 8px 14px)'
+        );
       }
 
       function showSelectionSummary(left, top, width) {
@@ -644,22 +785,105 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
           return;
         }
         hoverReadout.innerHTML = hoverReadoutDefault;
+        const geom = currentGeometry();
+        hoverReadout.style.left = (geom.left + 20) + 'px';
+        hoverReadout.style.top = (geom.top + 10) + 'px';
+      }
+
+      function getShellRect() {
+        return chartShell ? chartShell.getBoundingClientRect() : gd.getBoundingClientRect();
+      }
+
+      function getCandleCenterX(indexValue) {
+        const candle = gd.querySelectorAll('.boxlayer .trace.boxes path.box')[indexValue];
+        if (!candle) {
+          return null;
+        }
+        const shellRect = getShellRect();
+        const candleRect = candle.getBoundingClientRect();
+        return ((candleRect.left + candleRect.right) / 2) - shellRect.left;
+      }
+
+      function hideCrosshair() {
+        for (const element of [crosshairX, crosshairY, crosshairXLabel, crosshairYLabel]) {
+          if (element) {
+            element.style.display = 'none';
+          }
+        }
+      }
+
+      function showCrosshair(index, localY, geom) {
+        const clampedIndex = Math.min(Math.max(0, index), bars.length - 1);
+        const centerX = indexToScreenX(clampedIndex, geom);
+        const price = screenYToPrice(localY, geom);
+        if (crosshairX) {
+          crosshairX.style.display = 'block';
+          crosshairX.style.left = geom.left + 'px';
+          crosshairX.style.top = (localY - 0.5) + 'px';
+          crosshairX.style.width = Math.max(0, geom.right - geom.left) + 'px';
+        }
+        if (crosshairY) {
+          crosshairY.style.display = 'block';
+          crosshairY.style.left = (centerX - 0.5) + 'px';
+          crosshairY.style.top = geom.top + 'px';
+          crosshairY.style.height = Math.max(0, geom.bottom - geom.top) + 'px';
+        }
+        if (crosshairXLabel) {
+          crosshairXLabel.style.display = 'block';
+          crosshairXLabel.textContent = timestampLabels[clampedIndex];
+          crosshairXLabel.style.left = Math.max(geom.left, Math.min(centerX - 52, geom.right - 124)) + 'px';
+          crosshairXLabel.style.top = (geom.bottom + 6) + 'px';
+        }
+        if (crosshairYLabel) {
+          crosshairYLabel.style.display = 'block';
+          crosshairYLabel.textContent = price.toFixed(5);
+          crosshairYLabel.style.left = Math.max(8, geom.left - 74) + 'px';
+          crosshairYLabel.style.top = Math.max(geom.top - 10, Math.min(localY - 9, geom.bottom - 22)) + 'px';
+        }
       }
 
       function updateHoverReadout(point) {
         if (!hoverReadout || !point || !point.data || point.data.type !== 'candlestick') {
           return;
         }
-        const xValue = point.x instanceof Date ? point.x.toISOString().slice(0, 16).replace('T', ' ') : String(point.x);
+        const xValue = String(point.customdata ?? timestampLabels[Number(point.pointNumber ?? 0)] ?? '');
         const pointNumber = Number(point.pointNumber ?? 0);
         const openValue = Number(point.open ?? point.data.open?.[pointNumber] ?? 0);
         const highValue = Number(point.high ?? point.data.high?.[pointNumber] ?? 0);
         const lowValue = Number(point.low ?? point.data.low?.[pointNumber] ?? 0);
         const closeValue = Number(point.close ?? point.data.close?.[pointNumber] ?? 0);
+        hoverReadout.style.color = closeValue >= openValue ? '#166534' : '#b91c1c';
         hoverReadout.innerHTML =
           "<div class='hover-line'>" + xValue + "</div>" +
           "<div class='hover-values'><span>O " + openValue.toFixed(5) + "</span><span>H " + highValue.toFixed(5) + "</span></div>" +
           "<div class='hover-values'><span>C " + closeValue.toFixed(5) + "</span><span>L " + lowValue.toFixed(5) + "</span></div>";
+      }
+
+      function updateAxisTicks(targetGd, leftValue, rightValue) {
+        if (!targetGd || !bars.length) {
+          return;
+        }
+        const startIndex = Math.max(0, Math.floor(leftValue + 0.5));
+        const endIndex = Math.min(bars.length - 1, Math.ceil(rightValue - 0.5));
+        const visibleCount = Math.max(1, endIndex - startIndex + 1);
+        const preferredTickCount = 8;
+        const stepCandidates = [1, 2, 4, 8, 12, 24, 48, 96, 192, 384, 768];
+        const step = stepCandidates.find((candidate) => Math.ceil(visibleCount / candidate) <= preferredTickCount) || stepCandidates[stepCandidates.length - 1];
+        const tickvals = [];
+        const ticktext = [];
+        for (let index = startIndex; index <= endIndex; index += step) {
+          tickvals.push(index);
+          ticktext.push(timestampLabels[index].replace(' ', '<br>'));
+        }
+        if (tickvals[tickvals.length - 1] !== endIndex) {
+          tickvals.push(endIndex);
+          ticktext.push(timestampLabels[endIndex].replace(' ', '<br>'));
+        }
+        Plotly.relayout(targetGd, {
+          'xaxis.tickmode': 'array',
+          'xaxis.tickvals': tickvals,
+          'xaxis.ticktext': ticktext,
+        });
       }
 
       function syncInteractionLayer(enabled) {
@@ -674,17 +898,45 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         interactionLayer.style.display = enabled ? 'block' : 'none';
         interactionLayer.style.pointerEvents = enabled ? 'auto' : 'none';
         interactionLayer.style.cursor = selectedBox ? 'move' : 'crosshair';
+        if (!enabled) {
+          hideCrosshair();
+        }
       }
 
-      function updateSelectionOverlay(left, top, width, height) {
+      function updateSelectionOverlay(left, top, width, height, color) {
         if (!selectionOverlay) {
           return;
         }
+        updateSelectionStrokeColor(color || 'rgba(15, 118, 110, 0.95)');
         selectionOverlay.style.display = 'block';
-        selectionOverlay.style.left = left + 'px';
-        selectionOverlay.style.top = top + 'px';
-        selectionOverlay.style.width = width + 'px';
-        selectionOverlay.style.height = height + 'px';
+        selectionOverlay.style.left = '0px';
+        selectionOverlay.style.top = '0px';
+        selectionOverlay.style.width = '100%%';
+        selectionOverlay.style.height = '100%%';
+        if (selectionLeftEdge) {
+          selectionLeftEdge.style.display = 'block';
+          selectionLeftEdge.style.left = (left - 0.5) + 'px';
+          selectionLeftEdge.style.top = top + 'px';
+          selectionLeftEdge.style.height = height + 'px';
+        }
+        if (selectionRightEdge) {
+          selectionRightEdge.style.display = 'block';
+          selectionRightEdge.style.left = (left + width - 0.5) + 'px';
+          selectionRightEdge.style.top = top + 'px';
+          selectionRightEdge.style.height = height + 'px';
+        }
+        if (selectionTopEdge) {
+          selectionTopEdge.style.display = 'block';
+          selectionTopEdge.style.left = left + 'px';
+          selectionTopEdge.style.top = (top - 0.5) + 'px';
+          selectionTopEdge.style.width = width + 'px';
+        }
+        if (selectionBottomEdge) {
+          selectionBottomEdge.style.display = 'block';
+          selectionBottomEdge.style.left = left + 'px';
+          selectionBottomEdge.style.top = (top + height - 0.5) + 'px';
+          selectionBottomEdge.style.width = width + 'px';
+        }
       }
 
       function hitSelectedBox(localX, localY) {
@@ -726,76 +978,32 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         return null;
       }
 
-      function screenXToTime(screenX, geom) {
-        const ratio = (screenX - geom.left) / (geom.right - geom.left || 1);
-        const xRange = gd._fullLayout.xaxis.range;
-        const leftMs = new Date(xRange[0]).getTime();
-        const rightMs = new Date(xRange[1]).getTime();
-        return leftMs + ((rightMs - leftMs) * ratio);
+      function screenXToIndex(screenX, geom) {
+        const axis = gd._fullLayout.xaxis;
+        const plotX = screenX - geom.left;
+        return axis.p2l(plotX);
       }
 
-      function timeToScreenX(timeMs, geom) {
-        const xRange = gd._fullLayout.xaxis.range;
-        const leftMs = new Date(xRange[0]).getTime();
-        const rightMs = new Date(xRange[1]).getTime();
-        const ratio = (timeMs - leftMs) / (rightMs - leftMs || 1);
-        return geom.left + (ratio * (geom.right - geom.left));
-      }
-
-      function nearestBarIndexAtTime(targetMs) {
-        if (!barTimes.length) {
-          return 0;
+      function indexToScreenX(indexValue, geom) {
+        const candleCenter = getCandleCenterX(indexValue);
+        if (candleCenter !== null) {
+          return candleCenter;
         }
-        let low = 0;
-        let high = barTimes.length - 1;
-        while (low <= high) {
-          const mid = Math.floor((low + high) / 2);
-          const value = barTimes[mid];
-          if (value === targetMs) {
-            return mid;
-          }
-          if (value < targetMs) {
-            low = mid + 1;
-          } else {
-            high = mid - 1;
-          }
-        }
-        if (low <= 0) {
-          return 0;
-        }
-        if (low >= barTimes.length) {
-          return barTimes.length - 1;
-        }
-        return Math.abs(barTimes[low] - targetMs) < Math.abs(barTimes[low - 1] - targetMs) ? low : low - 1;
+        const axis = gd._fullLayout.xaxis;
+        return geom.left + axis.l2p(indexValue);
       }
 
       function nearestBarIndexAtScreenX(screenX, geom) {
-        return nearestBarIndexAtTime(screenXToTime(screenX, geom));
-      }
-
-      function barBoundaryTime(index, side) {
-        const current = barTimes[index];
-        if (side === 'left') {
-          if (index === 0) {
-            const next = barTimes[Math.min(1, barTimes.length - 1)];
-            return current - ((next - current) / 2 || 0);
-          }
-          return (barTimes[index - 1] + current) / 2;
-        }
-        if (index >= barTimes.length - 1) {
-          const prev = barTimes[Math.max(0, barTimes.length - 2)];
-          return current + ((current - prev) / 2 || 0);
-        }
-        return (current + barTimes[index + 1]) / 2;
+        return Math.min(Math.max(0, Math.round(screenXToIndex(screenX, geom))), bars.length - 1);
       }
 
       function boxGeometryFromIndices(startIndex, endIndex, top, height, geom) {
-        const left = timeToScreenX(barBoundaryTime(startIndex, 'left'), geom);
-        const right = timeToScreenX(barBoundaryTime(endIndex, 'right'), geom);
+        const left = indexToScreenX(startIndex, geom);
+        const right = indexToScreenX(endIndex, geom);
         return {
-          left,
+          left: Math.min(left, right),
           top,
-          width: Math.max(1, right - left),
+          width: Math.max(1, Math.abs(right - left)),
           height,
         };
       }
@@ -813,8 +1021,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         const topY = Math.max(geom.top, Math.min(startY, endY));
         const bottomY = Math.min(geom.bottom, Math.max(startY, endY));
         if (endIndex < startIndex || bottomY <= topY) {
-          summary.innerHTML = '<strong>Selection</strong><div class="empty">No valid box selection.</div>';
-          showSelectionSummary(12, 72, 0);
+          hideSelectionSummary();
           return;
         }
 
@@ -833,13 +1040,12 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
 
       function currentGeometry() {
         const full = gd._fullLayout;
-        const size = full._size;
-        const xDomain = full.xaxis.domain;
-        const yDomain = full.yaxis.domain;
-        const left = size.l + (xDomain[0] * size.w);
-        const right = size.l + (xDomain[1] * size.w);
-        const top = size.t + ((1 - yDomain[1]) * size.h);
-        const bottom = size.t + ((1 - yDomain[0]) * size.h);
+        const shellRect = getShellRect();
+        const gdRect = gd.getBoundingClientRect();
+        const left = (gdRect.left - shellRect.left) + full.xaxis._offset;
+        const right = left + full.xaxis._length;
+        const top = (gdRect.top - shellRect.top) + full.yaxis._offset;
+        const bottom = top + full.yaxis._length;
         return { left, right, top, bottom };
       }
 
@@ -848,22 +1054,25 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
           return;
         }
         const geom = currentGeometry();
+        const shellRect = getShellRect();
+        const localX = event.clientX - shellRect.left;
+        const localY = event.clientY - shellRect.top;
         if (
-          event.clientX < gd.getBoundingClientRect().left + geom.left ||
-          event.clientX > gd.getBoundingClientRect().left + geom.right ||
-          event.clientY < gd.getBoundingClientRect().top + geom.top ||
-          event.clientY > gd.getBoundingClientRect().top + geom.bottom
+          localX < geom.left ||
+          localX > geom.right ||
+          localY < geom.top ||
+          localY > geom.bottom
         ) {
           return;
         }
 
         const width = geom.right - geom.left || 1;
-        const pointerX = Math.min(Math.max(event.clientX - gd.getBoundingClientRect().left - geom.left, 0), width);
+        const pointerX = Math.min(Math.max(localX - geom.left, 0), width);
         const left = gd._fullLayout.xaxis.range[0];
         const right = gd._fullLayout.xaxis.range[1];
-        const leftMs = new Date(left).getTime();
-        const rightMs = new Date(right).getTime();
-        const span = rightMs - leftMs;
+        const leftIndex = Number(left);
+        const rightIndex = Number(right);
+        const span = rightIndex - leftIndex;
         if (!Number.isFinite(span) || span <= 0) {
           return;
         }
@@ -872,7 +1081,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
         const zoomFactor = event.deltaY < 0 ? 0.85 : 1.15;
         const nextSpan = span * zoomFactor;
         const ratio = pointerX / width;
-        const anchor = leftMs + (span * ratio);
+        const anchor = leftIndex + (span * ratio);
         const nextLeft = anchor - (nextSpan * ratio);
         const nextRight = anchor + (nextSpan * (1 - ratio));
 
@@ -880,15 +1089,15 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
       }, { passive: false });
 
       gd.addEventListener('mousedown', function(event) {
-        const rect = gd.getBoundingClientRect();
+        const rect = getShellRect();
         const geom = currentGeometry();
         const localX = event.clientX - rect.left;
         const localY = event.clientY - rect.top;
         const axisBand = 28;
 
         if (localX >= geom.left && localX <= geom.right && localY >= geom.bottom && localY <= geom.bottom + axisBand) {
-          const left = new Date(gd._fullLayout.xaxis.range[0]).getTime();
-          const right = new Date(gd._fullLayout.xaxis.range[1]).getTime();
+          const left = Number(gd._fullLayout.xaxis.range[0]);
+          const right = Number(gd._fullLayout.xaxis.range[1]);
           axisDrag = {
             mode: 'xzoom',
             startX: event.clientX,
@@ -917,7 +1126,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
           if (toolMode !== 'select') {
             return;
           }
-          const rect = gd.getBoundingClientRect();
+          const rect = getShellRect();
           const geom = currentGeometry();
           const localX = event.clientX - rect.left;
           const localY = event.clientY - rect.top;
@@ -929,6 +1138,12 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
               originalHeight: selectedBox.height,
               startIndex: selectedBox.startIndex,
               endIndex: selectedBox.endIndex,
+              previewStartIndex: selectedBox.startIndex,
+              previewEndIndex: selectedBox.endIndex,
+              previewLeft: selectedBox.left,
+              previewTop: selectedBox.top,
+              previewWidth: selectedBox.width,
+              previewHeight: selectedBox.height,
             };
           } else if (hitSelectedBox(localX, localY)) {
             const geom = currentGeometry();
@@ -939,17 +1154,36 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
               offsetY: localY - selectedBox.top,
               spanBars: selectedBox.endIndex - selectedBox.startIndex,
               height: selectedBox.height,
+              previewStartIndex: selectedBox.startIndex,
+              previewEndIndex: selectedBox.endIndex,
+              previewLeft: selectedBox.left,
+              previewTop: selectedBox.top,
+              previewWidth: selectedBox.width,
+              previewHeight: selectedBox.height,
             };
           } else {
             selectedBox = null;
             const geom = currentGeometry();
+            const startIndex = nearestBarIndexAtScreenX(localX, geom);
             boxSelect = {
               mode: 'new',
-              startIndex: nearestBarIndexAtScreenX(localX, geom),
+              startIndex,
               startY: localY,
             };
-            const overlay = boxGeometryFromIndices(boxSelect.startIndex, boxSelect.startIndex, localY, 0, geom);
-            updateSelectionOverlay(overlay.left, overlay.top, overlay.width, overlay.height);
+            const overlay = boxGeometryFromIndices(startIndex, startIndex, localY, 0, geom);
+            boxSelect.previewStartIndex = startIndex;
+            boxSelect.previewEndIndex = startIndex;
+            boxSelect.previewLeft = overlay.left;
+            boxSelect.previewTop = overlay.top;
+            boxSelect.previewWidth = overlay.width;
+            boxSelect.previewHeight = overlay.height;
+            updateSelectionOverlay(
+              overlay.left,
+              overlay.top,
+              overlay.width,
+              overlay.height,
+              selectionDragColor,
+            );
           }
           event.preventDefault();
         });
@@ -958,9 +1192,13 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
           if (toolMode !== 'select') {
             return;
           }
-          const rect = gd.getBoundingClientRect();
+          const rect = getShellRect();
+          const geom = currentGeometry();
           const localX = event.clientX - rect.left;
           const localY = event.clientY - rect.top;
+          const snappedIndex = nearestBarIndexAtScreenX(localX, geom);
+          const snappedX = indexToScreenX(snappedIndex, geom);
+          showCrosshair(snappedIndex, Math.min(Math.max(localY, geom.top), geom.bottom), geom);
           const edge = hitSelectedBoxEdge(localX, localY);
           if (edge === 'left' || edge === 'right') {
             interactionLayer.style.cursor = 'ew-resize';
@@ -970,14 +1208,19 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
             interactionLayer.style.cursor = hitSelectedBox(localX, localY) ? 'move' : 'crosshair';
           }
         });
+        interactionLayer.addEventListener('mouseleave', function() {
+          hideCrosshair();
+        });
       }
 
       window.addEventListener('mousemove', function(event) {
         if (boxSelect) {
-          const rect = gd.getBoundingClientRect();
+          const rect = getShellRect();
           const geom = currentGeometry();
           const localX = Math.min(Math.max(event.clientX - rect.left, geom.left), geom.right);
           const localY = Math.min(Math.max(event.clientY - rect.top, geom.top), geom.bottom);
+          const snappedIndex = nearestBarIndexAtScreenX(localX, geom);
+          showCrosshair(snappedIndex, localY, geom);
           let left, top, width, height;
           let startIndex, endIndex;
           if (boxSelect.mode === 'move' && selectedBox) {
@@ -1022,7 +1265,17 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
           }
           boxSelect.previewStartIndex = startIndex;
           boxSelect.previewEndIndex = endIndex;
-          updateSelectionOverlay(left, top, width, height);
+          boxSelect.previewLeft = left;
+          boxSelect.previewTop = top;
+          boxSelect.previewWidth = width;
+          boxSelect.previewHeight = height;
+          updateSelectionOverlay(
+            left,
+            top,
+            width,
+            height,
+            selectionDragColor,
+          );
           return;
         }
         if (!axisDrag) {
@@ -1052,11 +1305,10 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
       window.addEventListener('mouseup', function(event) {
         if (boxSelect) {
           const geom = currentGeometry();
-          const rect = gd.getBoundingClientRect();
-          const overlayLeft = parseFloat(selectionOverlay.style.left || '0');
-          const overlayTop = parseFloat(selectionOverlay.style.top || '0');
-          const overlayWidth = parseFloat(selectionOverlay.style.width || '0');
-          const overlayHeight = parseFloat(selectionOverlay.style.height || '0');
+          const overlayLeft = Number(boxSelect.previewLeft || 0);
+          const overlayTop = Number(boxSelect.previewTop || 0);
+          const overlayWidth = Number(boxSelect.previewWidth || 0);
+          const overlayHeight = Number(boxSelect.previewHeight || 0);
           selectedBox = {
             startIndex: boxSelect.previewStartIndex,
             endIndex: boxSelect.previewEndIndex,
@@ -1065,6 +1317,13 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
             width: overlayWidth,
             height: overlayHeight,
           };
+          updateSelectionOverlay(
+            selectedBox.left,
+            selectedBox.top,
+            selectedBox.width,
+            selectedBox.height,
+            selectionColorForRange(selectedBox.startIndex, selectedBox.endIndex),
+          );
           updateSelectionSummary(selectedBox.startIndex, selectedBox.endIndex, overlayTop, overlayTop + overlayHeight, geom);
           syncInteractionLayer(true);
           boxSelect = null;
@@ -1097,6 +1356,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
       setActiveButton('pan');
       syncInteractionLayer(false);
       resetHoverReadout();
+      updateAxisTicks(gd, initialLeft, initialRight);
       gd.on('plotly_hover', function(eventData) {
         const point = eventData && eventData.points
           ? eventData.points.find((item) => item.data && item.data.type === 'candlestick')
@@ -1108,16 +1368,35 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
       gd.on('plotly_unhover', function() {
         resetHoverReadout();
       });
+      gd.on('plotly_relayout', function(eventData) {
+        if (!eventData) {
+          return;
+        }
+        const xRange = eventData['xaxis.range'] || (
+          eventData['xaxis.range[0]'] !== undefined && eventData['xaxis.range[1]'] !== undefined
+            ? [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
+            : null
+        );
+        if (xRange) {
+          updateAxisTicks(gd, Number(xRange[0]), Number(xRange[1]));
+        }
+      });
     })();
     """ % (
         json.dumps(
         [
-            {"timestamp": bar.timestamp.isoformat(), "high": bar.high, "low": bar.low}
-            for bar in bars
+            {
+                "timestamp": _display_label(bar.timestamp),
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+            }
+            for bar in display_bars
         ]
         ),
-        json.dumps(visible_times[0].isoformat() if visible_times else bars[0].timestamp.isoformat()),
-        json.dumps(visible_times[-1].isoformat() if visible_times else bars[-1].timestamp.isoformat()),
+        visible_start_index - 0.5,
+        len(display_bars) - 0.5,
         initial_y_range[0],
         initial_y_range[1],
     )
@@ -1133,6 +1412,80 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar]) -> str:
             "displaylogo": False,
             "displayModeBar": False,
         },
+    )
+
+
+def _render_equity_chart(result: BacktestResult, display_bars: list[MarketBar]) -> str:
+    figure = go.Figure()
+    timestamp_labels = [_display_label(bar.timestamp) for bar in display_bars]
+    figure.add_trace(
+        go.Scatter(
+            x=[bar.timestamp for bar in display_bars],
+            y=result.equity_curve,
+            mode="lines",
+            name="Equity",
+            line={"color": "#2563eb", "width": 2},
+            customdata=timestamp_labels,
+            hovertemplate="%{customdata}<br>Equity=%{y:.2f}<extra></extra>",
+        )
+    )
+    figure.update_layout(
+        template="plotly_white",
+        height=220,
+        margin={"l": 24, "r": 24, "t": 16, "b": 28},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.88)",
+        dragmode=False,
+        hovermode="x",
+        showlegend=False,
+        font={"family": "Georgia, Times New Roman, serif", "color": "#1f2937"},
+    )
+    figure.update_yaxes(
+        tickformat=".2f",
+        ticks="outside",
+        automargin=True,
+        fixedrange=True,
+    )
+    figure.update_xaxes(
+        showticklabels=True,
+        type="date",
+        ticks="outside",
+        automargin=True,
+        fixedrange=True,
+        tickformat="%Y-%m-%d",
+    )
+    return to_html(
+        figure,
+        include_plotlyjs=False,
+        full_html=False,
+        div_id="trade-equity-chart",
+        config={
+            "responsive": True,
+            "scrollZoom": False,
+            "displaylogo": False,
+            "displayModeBar": False,
+        },
+    )
+
+
+def _display_timestamp(timestamp):
+    return timestamp + timedelta(hours=DISPLAY_TIMEZONE_OFFSET_HOURS)
+
+
+def _display_label(timestamp) -> str:
+    return _display_timestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+
+
+def _display_bar(bar: MarketBar) -> MarketBar:
+    return MarketBar(
+        timestamp=_display_timestamp(bar.timestamp),
+        symbol=bar.symbol,
+        timeframe=bar.timeframe,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
     )
 
 

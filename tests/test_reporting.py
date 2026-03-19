@@ -113,6 +113,7 @@ class ReportingTests(unittest.TestCase):
         rendered = render_html_report(result, bars=bars, data_quality_report=report)
 
         self.assertIn("<html", rendered)
+        self.assertIn("<h1>demo</h1>", rendered)
         self.assertIn("Candles And Trades", rendered)
         self.assertIn("plotly", rendered.lower())
         self.assertIn("Execution Log", rendered)
@@ -121,7 +122,7 @@ class ReportingTests(unittest.TestCase):
         self.assertIn('"scrollZoom": false', rendered)
         self.assertIn('"displayModeBar": false', rendered)
         self.assertIn('"dragmode":"pan"', rendered)
-        self.assertIn('"rangebreaks":[{"bounds":["sat","mon"]}]', rendered)
+        self.assertIn('"type":"linear"', rendered)
         self.assertIn('"range"', rendered)
         self.assertIn("trade-report-chart", rendered)
         self.assertIn("chart-toolbar", rendered)
@@ -146,6 +147,8 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("mode: 'xzoom'", rendered)
         self.assertIn("mode: 'yzoom'", rendered)
         self.assertIn("hovertemplate", rendered)
+        self.assertIn('"open"', rendered)
+        self.assertIn('"close"', rendered)
 
     def test_cli_can_write_html_report(self) -> None:
         import subprocess
