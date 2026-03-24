@@ -22,7 +22,7 @@ from trade.strategy_engine import demo_strategy as _demo_strategy  # noqa: F401
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a strategy backtest within the research framework.")
     parser.add_argument("csv_path", help="Path to the OHLCV CSV file")
-    parser.add_argument("--strategy-id", default="demo.multi_timeframe_ma")
+    parser.add_argument("--strategy-id", default="demo.single_position_ma_trend")
     parser.add_argument("--symbol", default="EUR/USD")
     parser.add_argument("--timeframe", default="15m")
     parser.add_argument("--ma-periods", default=",".join(str(period) for period in DEFAULT_MA_PERIODS))

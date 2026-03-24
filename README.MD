@@ -67,6 +67,8 @@ Current vertical slice:
 - emit text or JSON reports with review suggestions
 - support multi-timeframe MA preparation for `15m`, `1h`, `4h`, and `1d`
 - support strategy registration so public example strategies stay separate from framework execution
+- carry strategy metadata through the backtest result so reports can render plugin-defined rules without coupling to specific strategies
+- carry explicit position side through strategy context so long/short logic stays outside the engine
 
 Current strategy skeleton:
 
@@ -75,6 +77,16 @@ Current strategy skeleton:
 - MA stack: `MA20 > MA60 > MA240`
 - entry concept: `15m` close crosses above `15m MA20` while higher-timeframe stacks remain bullish
 - exit concept: `15m` close falls below `15m MA20` or execution-timeframe MA stack breaks
+
+Current default execution strategy:
+
+- single-position
+- bidirectional
+- long entry: `MA20 > MA60` and `close > MA20`
+- long exit: `close < MA20`
+- short entry: `MA20 < MA60` and `close < MA20`
+- short exit: `close > MA20`
+- no pyramiding, no simultaneous long/short exposure
 
 ## Framework Direction
 
@@ -166,7 +178,7 @@ Current download architecture:
 - historical download and realtime quote access are intentionally separated so future signal generation does not distort the backtest ingestion path
 - imported bars are normalized through shared symbol/timeframe standards and can be checked with the data-quality inspector
 - CLI and JSON reports include data-quality context so import problems are visible before strategy conclusions are trusted
-- static HTML reporting is available for readable backtest review, including candlestick charts, trade markers, KPI cards, and equity curves
+- static HTML reporting is available for readable backtest review, including candlestick charts, trade markers, KPI cards, equity curves, and strategy parameter contracts
 
 Run the test suite:
 
@@ -184,6 +196,12 @@ Run the default multi-timeframe MA skeleton on the long `15m` fixture:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_15m_long_demo.csv --symbol EUR/USD --timeframe 15m
+```
+
+Run the multi-timeframe MA skeleton explicitly:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m trade.cli examples/eurusd_15m_long_demo.csv --symbol EUR/USD --timeframe 15m --strategy-id demo.multi_timeframe_ma
 ```
 
 Get compact JSON analysis for agent workflows:

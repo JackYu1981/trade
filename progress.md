@@ -29,3 +29,14 @@
 - Cleaned floating-point noise from underwater-curve output for more readable reports
 - Added ex-post baseline objects and a swing/leg marker for post-trade comparison
 - Documented the baseline as a historical benchmark, not a realtime entry model
+
+## 2026-03-24
+
+- Added explicit `position_side` to `StrategyContext` so strategies can implement long/short logic without coupling to the backtest engine
+- Extended `BacktestResult` with strategy name, description, and parameters so reports can render plugin-defined strategy contracts generically
+- Added reusable MA pair-order rules for `fast > mid` and `fast < mid` conditions
+- Added `demo.single_position_ma_trend`, a bidirectional single-position MA strategy plugin using `MA20/MA60` trend gating and `MA20` exits
+- Extended the backtest engine to support `LONG` and `SHORT` positions in the same single-position framework
+- Updated text, JSON, and HTML reports to show strategy metadata and execution rules
+- Switched the CLI default strategy to `demo.single_position_ma_trend`
+- Verified strategy, pipeline, and reporting tests all pass after the framework changes

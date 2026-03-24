@@ -56,6 +56,7 @@ class StrategyContext:
     current_bar: MarketBar
     previous_bar: MarketBar | None
     has_position: bool
+    position_side: str | None = None
     features: dict[str, Any] = field(default_factory=dict)
 
 
@@ -123,6 +124,9 @@ class BacktestResult:
     symbol: str
     timeframe: str
     strategy_id: str
+    strategy_name: str
+    strategy_description: str
+    strategy_parameters: dict[str, Any]
     initial_cash: float
     final_cash: float
     trades: list[Trade]

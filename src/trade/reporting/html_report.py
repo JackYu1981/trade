@@ -37,6 +37,12 @@ def render_html_report(
             "top_blocked_reasons": analysis.top_blocked_reasons,
             "suggestions": analysis.suggestions,
         },
+        "strategy": {
+            "id": result.strategy_id,
+            "name": result.strategy_name,
+            "description": result.strategy_description,
+            "parameters": result.strategy_parameters,
+        },
         "data_quality": _data_quality_payload(data_quality_report),
         "trades": [asdict(trade) for trade in result.trades],
     }
@@ -62,6 +68,10 @@ def render_html_report(
         for trade in result.trades
     ) or "<tr><td colspan=\"6\">No completed trades</td></tr>"
     suggestions_html = "\n".join(f"<li>{escape(item)}</li>" for item in analysis.suggestions)
+    strategy_parameters_html = "\n".join(
+        f"<li><strong>{escape(str(key))}</strong>: {escape(str(value))}</li>"
+        for key, value in result.strategy_parameters.items()
+    ) or "<li>No strategy parameters recorded</li>"
     blocked_html = "\n".join(
         f"<li><strong>{escape(reason)}</strong>: {count}</li>"
         for reason, count in analysis.top_blocked_reasons
@@ -396,7 +406,8 @@ def render_html_report(
     <section class="hero">
       <div class="eyebrow">Research Report</div>
       <h1>{escape(_strategy_display_name(str(summary['strategy_id'])))}</h1>
-      <div class="subtle">{escape(str(summary['symbol']))} · {escape(str(summary['timeframe']))} · demo strategy used to validate report readability</div>
+      <div class="subtle">{escape(result.strategy_name)} · {escape(str(summary['symbol']))} · {escape(str(summary['timeframe']))}</div>
+      <div class="subtle">{escape(result.strategy_description)}</div>
       <div class="grid">
         {"".join(f'<div class="card"><div class="label">{escape(label)}</div><div class="value">{escape(value)}</div></div>' for label, value in summary_cards)}
       </div>
@@ -460,16 +471,33 @@ def render_html_report(
 
     <section class="panel split">
       <div>
+        <div class="eyebrow">Strategy Contract</div>
+        <h2>Execution Rules</h2>
+        <ul>{strategy_parameters_html}</ul>
+      </div>
+      <div>
         <div class="eyebrow">Review</div>
         <h2>Strategy Notes</h2>
         <ul>{suggestions_html}</ul>
         <div class="eyebrow" style="margin-top:18px;">Blocked Reasons</div>
         <ul>{blocked_html}</ul>
       </div>
+    </section>
+
+    <section class="panel split">
       <div>
         <div class="eyebrow">Data Quality</div>
         <h2>Input Status</h2>
         <ul>{data_quality_html}</ul>
+      </div>
+      <div>
+        <div class="eyebrow">Positioning</div>
+        <h2>Execution Mode</h2>
+        <ul>
+          <li><strong>Position mode</strong>: {escape(str(result.strategy_parameters.get('position_mode', 'unspecified')))}</li>
+          <li><strong>Trade count</strong>: {summary['trade_count']}</li>
+          <li><strong>Sides observed</strong>: {escape(", ".join(sorted({trade.side for trade in result.trades})) if result.trades else "none")}</li>
+        </ul>
       </div>
     </section>
 
@@ -506,7 +534,10 @@ def render_html_report(
 
 def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_bars: list[MarketBar]) -> str:
     fish_legs = build_window_legs(bars, default_fish_window_config())
-    ma60_values = moving_average(bars, period=60)
+    fast_period = int(result.strategy_parameters.get("fast_period", 20))
+    mid_period = int(result.strategy_parameters.get("mid_period", 60))
+    fast_ma_values = moving_average(bars, period=fast_period)
+    mid_ma_values = moving_average(bars, period=mid_period)
     bar_indices = list(range(len(display_bars)))
     timestamp_labels = [_display_label(bar.timestamp) for bar in display_bars]
     original_index_by_timestamp = {bar.timestamp.isoformat(): index for index, bar in enumerate(bars)}
@@ -553,37 +584,58 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
         )
 
     if result.trades:
-        entry_indices = [original_index_by_timestamp[trade.entry_time.isoformat()] for trade in result.trades]
-        exit_indices = [original_index_by_timestamp[trade.exit_time.isoformat()] for trade in result.trades]
-        figure.add_trace(
-            go.Scatter(
-                x=entry_indices,
-                y=[trade.entry_price for trade in result.trades],
-                mode="markers",
-                name="Entries",
-                marker={"size": 10, "color": "#0f766e", "symbol": "triangle-up"},
-                customdata=[timestamp_labels[index] for index in entry_indices],
-                hovertemplate="Entry<br>%{customdata}<br>Price=%{y:.5f}<extra></extra>",
-            ),
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=exit_indices,
-                y=[trade.exit_price for trade in result.trades],
-                mode="markers",
-                name="Exits",
-                marker={"size": 10, "color": "#b91c1c", "symbol": "triangle-down"},
-                customdata=[timestamp_labels[index] for index in exit_indices],
-                hovertemplate="Exit<br>%{customdata}<br>Price=%{y:.5f}<extra></extra>",
-            ),
-        )
+        trade_groups = [
+            ("LONG", "entry", "Long Entry", "triangle-up", "#2563eb", "Long entry"),
+            ("LONG", "exit", "Long Exit", "triangle-down", "#dc2626", "Long exit"),
+            ("SHORT", "entry", "Short Entry", "triangle-down", "#dc2626", "Short entry"),
+            ("SHORT", "exit", "Short Exit", "triangle-up", "#2563eb", "Short exit"),
+        ]
+        for side, event_kind, trace_name, symbol, color, hover_label in trade_groups:
+            selected_trades = [trade for trade in result.trades if trade.side == side]
+            if not selected_trades:
+                continue
+            if event_kind == "entry":
+                indices = [original_index_by_timestamp[trade.entry_time.isoformat()] for trade in selected_trades]
+                prices = [trade.entry_price for trade in selected_trades]
+            else:
+                indices = [original_index_by_timestamp[trade.exit_time.isoformat()] for trade in selected_trades]
+                prices = [trade.exit_price for trade in selected_trades]
+
+            figure.add_trace(
+                go.Scatter(
+                    x=indices,
+                    y=prices,
+                    mode="markers",
+                    name=trace_name,
+                    marker={
+                        "size": 15,
+                        "color": color,
+                        "symbol": symbol,
+                        "line": {"color": "#ffffff", "width": 1.5},
+                    },
+                    customdata=[timestamp_labels[index] for index in indices],
+                    hovertemplate=f"{hover_label}<br>%{{customdata}}<br>Price=%{{y:.5f}}<extra></extra>",
+                    showlegend=False,
+                ),
+            )
 
     figure.add_trace(
         go.Scatter(
             x=bar_indices,
-            y=ma60_values,
+            y=fast_ma_values,
             mode="lines",
-            name="MA60",
+            name=f"MA{fast_period}",
+            line={"color": "#0f766e", "width": 2},
+            hoverinfo="skip",
+        ),
+    )
+
+    figure.add_trace(
+        go.Scatter(
+            x=bar_indices,
+            y=mid_ma_values,
+            mode="lines",
+            name=f"MA{mid_period}",
             line={"color": "#facc15", "width": 2},
             hoverinfo="skip",
         ),
@@ -598,7 +650,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
         dragmode="pan",
         hovermode="x",
         font={"family": "Georgia, Times New Roman, serif", "color": "#1f2937"},
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1},
+        showlegend=False,
     )
     figure.update_yaxes(
         tickformat=".5f",

@@ -17,6 +17,9 @@ class ReportingTests(unittest.TestCase):
             symbol="EUR/USD",
             timeframe="1h",
             strategy_id="demo.multi_timeframe_ma",
+            strategy_name="Demo Multi-Timeframe MA",
+            strategy_description="Example long-only strategy plugin built from composable MA rules.",
+            strategy_parameters={"position_mode": "single_position"},
             initial_cash=10_000.0,
             final_cash=10_000.0,
             trades=[],
@@ -44,6 +47,9 @@ class ReportingTests(unittest.TestCase):
             symbol="EUR/USD",
             timeframe="1h",
             strategy_id="demo.multi_timeframe_ma",
+            strategy_name="Demo Multi-Timeframe MA",
+            strategy_description="Example long-only strategy plugin built from composable MA rules.",
+            strategy_parameters={"position_mode": "single_position"},
             initial_cash=10_000.0,
             final_cash=10_001.0,
             trades=[
@@ -73,7 +79,10 @@ class ReportingTests(unittest.TestCase):
         result = BacktestResult(
             symbol="EUR/USD",
             timeframe="15m",
-            strategy_id="demo.multi_timeframe_ma",
+            strategy_id="demo.single_position_ma_trend",
+            strategy_name="Demo Single-Position MA Trend",
+            strategy_description="Single-position bidirectional MA trend strategy.",
+            strategy_parameters={"position_mode": "single_position", "fast_period": 20, "mid_period": 60},
             initial_cash=10_000.0,
             final_cash=10_001.0,
             trades=[
@@ -115,15 +124,19 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("<html", rendered)
         self.assertIn("<h1>demo</h1>", rendered)
         self.assertIn("Candles And Trades", rendered)
+        self.assertIn("Execution Rules", rendered)
+        self.assertIn("Demo Single-Position MA Trend", rendered)
         self.assertIn("plotly", rendered.lower())
         self.assertIn("Execution Log", rendered)
         self.assertIn("rgba(22, 163, 74, 0.10)", rendered)
+        self.assertIn("MA20", rendered)
         self.assertIn("MA60", rendered)
         self.assertIn('"scrollZoom": false', rendered)
         self.assertIn('"displayModeBar": false', rendered)
         self.assertIn('"dragmode":"pan"', rendered)
         self.assertIn('"type":"linear"', rendered)
         self.assertIn('"range"', rendered)
+        self.assertIn('"showlegend":false', rendered)
         self.assertIn("trade-report-chart", rendered)
         self.assertIn("chart-toolbar", rendered)
         self.assertIn("chart-analysis-box", rendered)
@@ -147,6 +160,8 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("mode: 'xzoom'", rendered)
         self.assertIn("mode: 'yzoom'", rendered)
         self.assertIn("hovertemplate", rendered)
+        self.assertIn("triangle-up", rendered)
+        self.assertIn("triangle-down", rendered)
         self.assertIn('"open"', rendered)
         self.assertIn('"close"', rendered)
 
@@ -176,6 +191,6 @@ class ReportingTests(unittest.TestCase):
             )
 
             output_path = Path(completed.stdout.strip())
-            self.assertTrue(str(output_path).endswith("reports/demo-multi_timeframe_ma-EUR-USD-1h.html"))
+            self.assertTrue(str(output_path).endswith("reports/demo-single_position_ma_trend-EUR-USD-1h.html"))
             self.assertTrue(output_path.exists())
             self.assertIn("Trade Backtest Report", output_path.read_text(encoding="utf-8"))

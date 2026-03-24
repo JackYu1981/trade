@@ -12,6 +12,8 @@ def render_text_report(result: BacktestResult, data_quality_report: DataQualityR
     summary = analysis.summary
     lines = [
         f"Strategy: {summary['strategy_id']}",
+        f"Strategy name: {result.strategy_name}",
+        f"Strategy description: {result.strategy_description}",
         f"Symbol: {summary['symbol']}",
         f"Timeframe: {summary['timeframe']}",
         f"Initial cash: {summary['initial_cash']:.5f}",
@@ -28,6 +30,17 @@ def render_text_report(result: BacktestResult, data_quality_report: DataQualityR
         f"Avg holding: {summary['avg_holding_minutes']:.1f}m",
         f"Max win streak: {summary['max_win_streak']}",
         f"Max loss streak: {summary['max_loss_streak']}",
+        f"Position mode: {result.strategy_parameters.get('position_mode', 'unspecified')}",
+        "",
+        "Strategy Parameters:",
+    ]
+    if result.strategy_parameters:
+        for key, value in result.strategy_parameters.items():
+            lines.append(f"- {key}: {value}")
+    else:
+        lines.append("- No strategy parameters recorded")
+
+    lines.extend([
         "",
         "Curves:",
         f"- Equity start/end: {analysis.curve_metrics['equity_curve_start']} -> {analysis.curve_metrics['equity_curve_end']}",
@@ -35,7 +48,7 @@ def render_text_report(result: BacktestResult, data_quality_report: DataQualityR
         f"- Max drawdown duration bars: {analysis.curve_metrics['max_drawdown_duration_bars']}",
         "",
         "Data Quality:",
-    ]
+    ])
     lines.extend(_render_data_quality_lines(data_quality_report))
     lines.extend([
         "",
@@ -76,6 +89,12 @@ def render_json_report(
             "blocked_action_counts": analysis.blocked_action_counts,
             "top_blocked_reasons": analysis.top_blocked_reasons,
             "suggestions": analysis.suggestions,
+        },
+        "strategy": {
+            "id": result.strategy_id,
+            "name": result.strategy_name,
+            "description": result.strategy_description,
+            "parameters": result.strategy_parameters,
         },
         "data_quality": _data_quality_payload(data_quality_report),
         "trades": [asdict(trade) for trade in result.trades],

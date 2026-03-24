@@ -20,6 +20,7 @@ def run_backtest(
     if len(bars) != len(ma_contexts):
         raise ValueError("bars and ma_contexts must have the same length")
 
+    strategy_definition = strategy.definition()
     cash = initial_cash
     open_position: tuple[str, object, float] | None = None
     trades: list[Trade] = []
@@ -31,6 +32,7 @@ def run_backtest(
             current_bar=bar,
             previous_bar=bars[index - 1] if index > 0 else None,
             has_position=open_position is not None,
+            position_side=open_position[0] if open_position is not None else None,
             features={
                 "current_ma": active_ma_values[index],
                 "previous_ma": active_ma_values[index - 1] if index > 0 else None,
@@ -47,13 +49,15 @@ def run_backtest(
 
         if decision.action == "BUY" and open_position is None and index < len(bars) - 1:
             open_position = ("LONG", bar.timestamp, bar.close)
-        elif decision.action == "SELL" and open_position is not None:
-            _, entry_time, entry_price = open_position
-            pnl = bar.close - entry_price
+        elif decision.action == "SHORT" and open_position is None and index < len(bars) - 1:
+            open_position = ("SHORT", bar.timestamp, bar.close)
+        elif decision.action in {"SELL", "COVER"} and open_position is not None:
+            side, entry_time, entry_price = open_position
+            pnl = bar.close - entry_price if side == "LONG" else entry_price - bar.close
             cash += pnl
             trades.append(
                 Trade(
-                    side="LONG",
+                    side=side,
                     entry_time=entry_time,
                     entry_price=entry_price,
                     exit_time=bar.timestamp,
@@ -65,20 +69,20 @@ def run_backtest(
 
         marked_equity = cash
         if open_position is not None:
-            _, _, entry_price = open_position
-            marked_equity += bar.close - entry_price
+            side, _, entry_price = open_position
+            marked_equity += (bar.close - entry_price) if side == "LONG" else (entry_price - bar.close)
 
         equity_curve.append(marked_equity)
         decisions.append(decision_record)
 
     if open_position is not None:
-        _, entry_time, entry_price = open_position
+        side, entry_time, entry_price = open_position
         final_bar = bars[-1]
-        pnl = final_bar.close - entry_price
+        pnl = final_bar.close - entry_price if side == "LONG" else entry_price - final_bar.close
         cash += pnl
         trades.append(
             Trade(
-                side="LONG",
+                side=side,
                 entry_time=entry_time,
                 entry_price=entry_price,
                 exit_time=final_bar.timestamp,
@@ -90,7 +94,10 @@ def run_backtest(
     return BacktestResult(
         symbol=bars[0].symbol,
         timeframe=bars[0].timeframe,
-        strategy_id=strategy.definition().strategy_id,
+        strategy_id=strategy_definition.strategy_id,
+        strategy_name=strategy_definition.name,
+        strategy_description=strategy_definition.description,
+        strategy_parameters=dict(strategy_definition.parameters),
         initial_cash=initial_cash,
         final_cash=cash,
         trades=trades,
