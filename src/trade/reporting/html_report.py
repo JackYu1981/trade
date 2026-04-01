@@ -7,7 +7,7 @@ import json
 
 from plotly import graph_objects as go
 from plotly.io import to_html
-from trade.analysis.baseline import build_window_legs, default_fish_window_config
+from trade.analysis.baseline import DEFAULT_BODY_SWING_WINDOW, build_window_legs, default_fish_window_config
 from trade.analysis.summary import analyze_backtest
 from trade.indicators.moving_average import moving_average
 from trade.models import BacktestResult, DataQualityReport, MarketBar
@@ -46,13 +46,16 @@ def render_html_report(
         "data_quality": _data_quality_payload(data_quality_report),
         "trades": [asdict(trade) for trade in result.trades],
     }
+    net_pnl = float(summary['net_pnl'])
+    total_return = float(summary['total_return_pct'])
+    sharpe = float(summary['sharpe'])
     summary_cards = [
-        ("Net PnL", f"{float(summary['net_pnl']):.5f}"),
-        ("Total Return", f"{float(summary['total_return_pct']):.2%}"),
-        ("Max Drawdown", f"{float(summary['max_drawdown']):.2%}"),
-        ("Sharpe", f"{float(summary['sharpe']):.2f}"),
-        ("Trades", str(summary["trade_count"])),
-        ("Win Rate", f"{float(summary['win_rate']):.2%}"),
+        ("Net PnL", f"{net_pnl:.5f}", "positive" if net_pnl >= 0 else "negative"),
+        ("Total Return", f"{total_return:.2%}", "positive" if total_return >= 0 else "negative"),
+        ("Max Drawdown", f"{float(summary['max_drawdown']):.2%}", "negative" if float(summary['max_drawdown']) > 0.02 else ""),
+        ("Sharpe", f"{sharpe:.2f}", "positive" if sharpe > 1 else ("negative" if sharpe < 0 else "")),
+        ("Trades", str(summary["trade_count"]), ""),
+        ("Win Rate", f"{float(summary['win_rate']):.2%}", "positive" if float(summary['win_rate']) > 0.5 else ("negative" if float(summary['win_rate']) < 0.4 else "")),
     ]
     trades_html = "\n".join(
         (
@@ -90,116 +93,152 @@ def render_html_report(
   <title>Trade Backtest Report</title>
   <style>
     :root {{
-      --bg: #f4efe6;
-      --panel: #fffdf8;
-      --ink: #1f2937;
-      --muted: #6b7280;
-      --line: #d6d3d1;
-      --accent: #0f766e;
-      --positive: #166534;
-      --negative: #b91c1c;
-      --shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+      --bg: #0f1117;
+      --panel: #181b23;
+      --panel-alt: #1e2230;
+      --ink: #e2e8f0;
+      --muted: #8892a4;
+      --line: rgba(148, 163, 184, 0.12);
+      --accent: #38bdf8;
+      --accent-dim: rgba(56, 189, 248, 0.10);
+      --positive: #4ade80;
+      --negative: #f87171;
+      --positive-bg: rgba(74, 222, 128, 0.08);
+      --negative-bg: rgba(248, 113, 113, 0.08);
+      --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 8px 32px rgba(0,0,0,0.2);
+      --radius: 16px;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       color: var(--ink);
-      background:
-        radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 28%),
-        linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
     }}
     main {{
-      width: min(1280px, calc(100vw - 32px));
-      margin: 32px auto 64px;
+      width: min(1360px, calc(100vw - 40px));
+      margin: 28px auto 64px;
       display: grid;
-      gap: 20px;
+      gap: 16px;
     }}
     .hero, .panel {{
       background: var(--panel);
-      border: 1px solid rgba(214, 211, 209, 0.85);
-      border-radius: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
       box-shadow: var(--shadow);
     }}
     .hero {{
-      padding: 28px;
+      padding: 32px 32px 28px;
       display: grid;
-      gap: 14px;
+      gap: 16px;
+      background: linear-gradient(135deg, var(--panel) 0%, var(--panel-alt) 100%);
+      border-top: 1px solid rgba(56, 189, 248, 0.15);
     }}
     .eyebrow {{
       text-transform: uppercase;
-      letter-spacing: 0.12em;
-      font-size: 12px;
+      letter-spacing: 0.14em;
+      font-size: 11px;
+      font-weight: 600;
       color: var(--accent);
     }}
-    h1, h2 {{
+    h1 {{
       margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #f8fafc;
+    }}
+    h2 {{
+      margin: 0;
+      font-size: 18px;
       font-weight: 600;
+      color: #f1f5f9;
     }}
     .subtle {{
       color: var(--muted);
-      font-size: 14px;
+      font-size: 13px;
+      line-height: 1.5;
     }}
     .grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+      margin-top: 4px;
     }}
     .card {{
-      padding: 16px;
+      padding: 16px 14px;
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(255,255,255,0.78);
+      border-radius: 12px;
+      background: var(--panel-alt);
+      transition: border-color 150ms ease, background 150ms ease;
+    }}
+    .card:hover {{
+      border-color: rgba(56, 189, 248, 0.2);
+      background: rgba(56, 189, 248, 0.04);
+    }}
+    .card.card-positive {{
+      border-color: rgba(74, 222, 128, 0.18);
+      background: var(--positive-bg);
+    }}
+    .card.card-negative {{
+      border-color: rgba(248, 113, 113, 0.18);
+      background: var(--negative-bg);
     }}
     .label {{
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
+      font-weight: 500;
       color: var(--muted);
     }}
     .value {{
-      margin-top: 6px;
-      font-size: 26px;
-      font-weight: 600;
+      margin-top: 8px;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
     }}
+    .card-positive .value {{ color: var(--positive); }}
+    .card-negative .value {{ color: var(--negative); }}
     .panel {{
-      padding: 22px;
+      padding: 24px;
     }}
     .split {{
       display: grid;
       grid-template-columns: 1.2fr 0.8fr;
-      gap: 20px;
+      gap: 16px;
     }}
     .chart-shell {{
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 12px;
       padding: 8px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,244,236,0.92));
+      background: linear-gradient(180deg, var(--panel-alt), var(--panel));
       overflow: hidden;
       position: relative;
     }}
     .equity-shell {{
       margin-top: 12px;
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 12px;
       padding: 8px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,244,236,0.92));
+      background: linear-gradient(180deg, var(--panel-alt), var(--panel));
       overflow: hidden;
       position: relative;
     }}
     .chart-toolbar {{
       position: absolute;
-      top: 18px;
-      right: 18px;
+      top: 16px;
+      right: 16px;
       display: flex;
-      gap: 6px;
+      gap: 4px;
       z-index: 3;
-      padding: 6px;
-      border: 1px solid rgba(214, 211, 209, 0.95);
-      border-radius: 14px;
-      background: rgba(255, 253, 248, 0.92);
-      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10);
-      backdrop-filter: blur(8px);
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(24, 27, 35, 0.92);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      backdrop-filter: blur(12px);
     }}
     .chart-hover-readout {{
       position: absolute;
@@ -210,10 +249,9 @@ def render_html_report(
       display: flex;
       flex-direction: column;
       gap: 1px;
-      color: #1d4ed8;
-      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
+      color: var(--accent);
       font-size: 12px;
-      line-height: 1.28;
+      line-height: 1.3;
     }}
     .chart-hover-readout .hover-title {{
       color: inherit;
@@ -231,31 +269,32 @@ def render_html_report(
       gap: 18px;
       color: inherit;
       font-weight: 600;
+      font-variant-numeric: tabular-nums;
     }}
     .chart-hover-readout .hover-values span {{
       min-width: 86px;
     }}
     .chart-tool {{
-      width: 36px;
-      height: 36px;
+      width: 32px;
+      height: 32px;
       border: 1px solid transparent;
-      border-radius: 10px;
+      border-radius: 8px;
       background: transparent;
-      color: var(--ink);
+      color: var(--muted);
       display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      transition: all 120ms ease;
     }}
     .chart-tool:hover {{
-      background: rgba(15, 118, 110, 0.08);
-      border-color: rgba(15, 118, 110, 0.18);
+      background: rgba(56, 189, 248, 0.08);
+      color: var(--ink);
     }}
     .chart-tool.active {{
       background: var(--accent);
-      color: white;
-      border-color: rgba(15, 118, 110, 0.4);
+      color: var(--bg);
+      border-color: var(--accent);
     }}
     .chart-analysis-box {{
       position: absolute;
@@ -263,17 +302,19 @@ def render_html_report(
       max-width: 240px;
       z-index: 3;
       padding: 12px 14px;
-      border: 1px solid rgba(214, 211, 209, 0.95);
-      border-radius: 14px;
-      background: rgba(255, 253, 248, 0.96);
-      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10);
-      backdrop-filter: blur(8px);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(24, 27, 35, 0.96);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      backdrop-filter: blur(12px);
       display: none;
+      font-size: 13px;
+      color: var(--ink);
     }}
     .chart-analysis-box strong {{
       display: block;
       margin-bottom: 6px;
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--accent);
@@ -299,7 +340,7 @@ def render_html_report(
       width: 1px;
       background-image: var(--selection-vertical-stroke, repeating-linear-gradient(
         to bottom,
-        rgba(15, 118, 110, 0.95) 0 8px,
+        rgba(56, 189, 248, 0.85) 0 8px,
         transparent 8px 14px
       ));
     }}
@@ -307,7 +348,7 @@ def render_html_report(
       height: 1px;
       background-image: var(--selection-horizontal-stroke, repeating-linear-gradient(
         to right,
-        rgba(15, 118, 110, 0.95) 0 8px,
+        rgba(56, 189, 248, 0.85) 0 8px,
         transparent 8px 14px
       ));
     }}
@@ -322,16 +363,16 @@ def render_html_report(
       height: 1px;
       background-image: repeating-linear-gradient(
         to right,
-        rgba(37, 99, 235, 0.65) 0 9px,
-        transparent 9px 15px
+        rgba(56, 189, 248, 0.5) 0 6px,
+        transparent 6px 12px
       );
     }}
     .chart-crosshair-line.y {{
       width: 1px;
       background-image: repeating-linear-gradient(
         to bottom,
-        rgba(37, 99, 235, 0.65) 0 9px,
-        transparent 9px 15px
+        rgba(56, 189, 248, 0.5) 0 6px,
+        transparent 6px 12px
       );
     }}
     .chart-axis-label {{
@@ -339,12 +380,14 @@ def render_html_report(
       z-index: 3;
       pointer-events: none;
       display: none;
-      padding: 2px 6px;
-      border-radius: 8px;
-      background: rgba(255, 253, 248, 0.96);
-      border: 1px solid rgba(37, 99, 235, 0.22);
-      color: #1d4ed8;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--accent);
       font-size: 11px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
       line-height: 1.1;
       white-space: nowrap;
     }}
@@ -363,40 +406,112 @@ def render_html_report(
     ul {{
       margin: 10px 0 0;
       padding-left: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }}
+    ul li strong {{
+      color: var(--ink);
     }}
     table {{
       width: 100%;
       border-collapse: collapse;
-      font-size: 14px;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
     }}
     th, td {{
-      padding: 12px 10px;
-      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
       text-align: left;
     }}
     th {{
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      background: var(--panel);
+    }}
+    td {{
+      border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+    }}
+    tbody tr:hover {{
+      background: rgba(56, 189, 248, 0.03);
+    }}
+    .table-scroll {{
+      max-height: 420px;
+      overflow-y: auto;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+    }}
+    .table-scroll::-webkit-scrollbar {{
+      width: 6px;
+    }}
+    .table-scroll::-webkit-scrollbar-track {{
+      background: transparent;
+    }}
+    .table-scroll::-webkit-scrollbar-thumb {{
+      background: rgba(148, 163, 184, 0.2);
+      border-radius: 3px;
     }}
     pre {{
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      font-size: 12px;
-      line-height: 1.45;
-      color: #334155;
+      font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--muted);
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      max-height: 400px;
+      overflow-y: auto;
     }}
     .positive {{ color: var(--positive); }}
     .negative {{ color: var(--negative); }}
+    details {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }}
+    details summary {{
+      padding: 12px 16px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+      background: var(--panel-alt);
+      transition: color 120ms;
+    }}
+    details summary:hover {{
+      color: var(--ink);
+    }}
+    details[open] summary {{
+      border-bottom: 1px solid var(--line);
+    }}
+    details pre {{
+      border: none;
+      border-radius: 0;
+    }}
     @media (max-width: 900px) {{
       .split {{
         grid-template-columns: 1fr;
       }}
+      .grid {{
+        grid-template-columns: repeat(3, 1fr);
+      }}
       main {{
-        width: min(100vw - 20px, 1280px);
+        width: min(100vw - 20px, 1360px);
         margin-top: 20px;
+      }}
+    }}
+    @media (max-width: 600px) {{
+      .grid {{
+        grid-template-columns: repeat(2, 1fr);
       }}
     }}
   </style>
@@ -409,7 +524,7 @@ def render_html_report(
       <div class="subtle">{escape(result.strategy_name)} · {escape(str(summary['symbol']))} · {escape(str(summary['timeframe']))}</div>
       <div class="subtle">{escape(result.strategy_description)}</div>
       <div class="grid">
-        {"".join(f'<div class="card"><div class="label">{escape(label)}</div><div class="value">{escape(value)}</div></div>' for label, value in summary_cards)}
+        {"".join(f'<div class="card{" card-" + cls if cls else ""}"><div class="label">{escape(label)}</div><div class="value">{escape(value)}</div></div>' for label, value, cls in summary_cards)}
       </div>
     </section>
 
@@ -504,6 +619,7 @@ def render_html_report(
     <section class="panel">
       <div class="eyebrow">Trades</div>
       <h2>Execution Log</h2>
+      <div class="table-scroll" style="margin-top: 12px;">
       <table>
         <thead>
           <tr>
@@ -519,12 +635,16 @@ def render_html_report(
           {trades_html}
         </tbody>
       </table>
+      </div>
     </section>
 
     <section class="panel">
       <div class="eyebrow">Payload</div>
       <h2>Structured Snapshot</h2>
-      <pre>{json_payload}</pre>
+      <details style="margin-top: 12px;">
+        <summary>Expand JSON payload</summary>
+        <pre>{json_payload}</pre>
+      </details>
     </section>
   </main>
 </body>
@@ -533,7 +653,7 @@ def render_html_report(
 
 
 def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_bars: list[MarketBar]) -> str:
-    fish_legs = build_window_legs(bars, default_fish_window_config())
+    fish_legs = build_window_legs(bars, default_fish_window_config(), body_swing_window=DEFAULT_BODY_SWING_WINDOW)
     fast_period = int(result.strategy_parameters.get("fast_period", 20))
     mid_period = int(result.strategy_parameters.get("mid_period", 60))
     fast_ma_values = moving_average(bars, period=fast_period)
@@ -562,8 +682,8 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
             close=[bar.close for bar in display_bars],
             customdata=timestamp_labels,
             name="Price",
-            increasing_line_color="#166534",
-            decreasing_line_color="#b91c1c",
+            increasing_line_color="#4ade80",
+            decreasing_line_color="#f87171",
             hovertemplate=(
                 "%{customdata}<br>"
                 "Open=%{open:.5f}<br>"
@@ -582,13 +702,21 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
             line_width=0,
             layer="below",
         )
+        if leg.body_start_index is not None:
+            figure.add_vrect(
+                x0=leg.body_start_index - 0.5,
+                x1=leg.body_end_index + 0.5,
+                fillcolor="rgba(0, 128, 0, 0.25)" if leg.direction == "up" else "rgba(178, 34, 34, 0.25)",
+                line_width=0,
+                layer="below",
+            )
 
     if result.trades:
         trade_groups = [
-            ("LONG", "entry", "Long Entry", "triangle-up", "#2563eb", "Long entry"),
-            ("LONG", "exit", "Long Exit", "triangle-down", "#dc2626", "Long exit"),
-            ("SHORT", "entry", "Short Entry", "triangle-down", "#dc2626", "Short entry"),
-            ("SHORT", "exit", "Short Exit", "triangle-up", "#2563eb", "Short exit"),
+            ("LONG", "entry", "Long Entry", "triangle-up", "#38bdf8", "Long entry"),
+            ("LONG", "exit", "Long Exit", "triangle-down", "#f87171", "Long exit"),
+            ("SHORT", "entry", "Short Entry", "triangle-down", "#f87171", "Short entry"),
+            ("SHORT", "exit", "Short Exit", "triangle-up", "#38bdf8", "Short exit"),
         ]
         for side, event_kind, trace_name, symbol, color, hover_label in trade_groups:
             selected_trades = [trade for trade in result.trades if trade.side == side]
@@ -625,7 +753,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
             y=fast_ma_values,
             mode="lines",
             name=f"MA{fast_period}",
-            line={"color": "#0f766e", "width": 2},
+            line={"color": "#38bdf8", "width": 1.5},
             hoverinfo="skip",
         ),
     )
@@ -636,20 +764,20 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
             y=mid_ma_values,
             mode="lines",
             name=f"MA{mid_period}",
-            line={"color": "#facc15", "width": 2},
+            line={"color": "#fbbf24", "width": 1.5},
             hoverinfo="skip",
         ),
     )
 
     figure.update_layout(
-        template="plotly_white",
+        template="plotly_dark",
         height=820,
         margin={"l": 24, "r": 24, "t": 58, "b": 24},
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.88)",
+        plot_bgcolor="rgba(30,34,48,0.6)",
         dragmode="pan",
         hovermode="x",
-        font={"family": "Georgia, Times New Roman, serif", "color": "#1f2937"},
+        font={"family": "Inter, -apple-system, sans-serif", "color": "#e2e8f0", "size": 11},
         showlegend=False,
     )
     figure.update_yaxes(
@@ -661,7 +789,8 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
         showspikes=True,
         spikemode="across",
         spikethickness=1,
-        spikecolor="rgba(37, 99, 235, 0.65)",
+        spikecolor="rgba(56, 189, 248, 0.5)",
+        gridcolor="rgba(148, 163, 184, 0.08)",
         range=initial_y_range,
     )
     figure.update_xaxes(
@@ -673,7 +802,8 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
         showspikes=True,
         spikemode="across",
         spikethickness=1,
-        spikecolor="rgba(37, 99, 235, 0.65)",
+        spikecolor="rgba(56, 189, 248, 0.5)",
+        gridcolor="rgba(148, 163, 184, 0.08)",
         rangeslider={"visible": False},
         range=initial_x_range,
     )
@@ -904,7 +1034,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
         const highValue = Number(point.high ?? point.data.high?.[pointNumber] ?? 0);
         const lowValue = Number(point.low ?? point.data.low?.[pointNumber] ?? 0);
         const closeValue = Number(point.close ?? point.data.close?.[pointNumber] ?? 0);
-        hoverReadout.style.color = closeValue >= openValue ? '#166534' : '#b91c1c';
+        hoverReadout.style.color = closeValue >= openValue ? '#4ade80' : '#f87171';
         hoverReadout.innerHTML =
           "<div class='hover-line'>" + xValue + "</div>" +
           "<div class='hover-values'><span>O " + openValue.toFixed(5) + "</span><span>H " + highValue.toFixed(5) + "</span></div>" +
@@ -1066,7 +1196,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
         return yRange[0] + ((yRange[1] - yRange[0]) * ratio);
       }
 
-      function updateSelectionSummary(startIndex, endIndex, startY, endY, geom) {
+      function updateSelectionSummary(startIndex, endIndex, startY, endY, geom, boxLeft, boxTop, boxWidth) {
         if (!summary) {
           return;
         }
@@ -1087,7 +1217,10 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
           '<strong>Selection</strong>' +
           '<div>Bars: ' + selectedBars.length + '</div>' +
           '<div>Range: ' + pointsDiff.toFixed(1) + ' pts</div>';
-        showSelectionSummary(selectedBox.left, selectedBox.top, selectedBox.width);
+        const anchorLeft = boxLeft !== undefined ? boxLeft : (selectedBox ? selectedBox.left : 0);
+        const anchorTop = boxTop !== undefined ? boxTop : (selectedBox ? selectedBox.top : 0);
+        const anchorWidth = boxWidth !== undefined ? boxWidth : (selectedBox ? selectedBox.width : 0);
+        showSelectionSummary(anchorLeft, anchorTop, anchorWidth);
       }
 
       function currentGeometry() {
@@ -1328,6 +1461,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
             height,
             selectionDragColor,
           );
+          updateSelectionSummary(startIndex, endIndex, top, top + height, geom, left, top, width);
           return;
         }
         if (!axisDrag) {
@@ -1376,7 +1510,7 @@ def _render_plotly_chart(result: BacktestResult, bars: list[MarketBar], display_
             selectedBox.height,
             selectionColorForRange(selectedBox.startIndex, selectedBox.endIndex),
           );
-          updateSelectionSummary(selectedBox.startIndex, selectedBox.endIndex, overlayTop, overlayTop + overlayHeight, geom);
+          updateSelectionSummary(selectedBox.startIndex, selectedBox.endIndex, overlayTop, overlayTop + overlayHeight, geom, selectedBox.left, selectedBox.top, selectedBox.width);
           syncInteractionLayer(true);
           boxSelect = null;
           return;
@@ -1476,27 +1610,30 @@ def _render_equity_chart(result: BacktestResult, display_bars: list[MarketBar]) 
             y=result.equity_curve,
             mode="lines",
             name="Equity",
-            line={"color": "#2563eb", "width": 2},
+            line={"color": "#38bdf8", "width": 2},
+            fill="tozeroy",
+            fillcolor="rgba(56, 189, 248, 0.08)",
             customdata=timestamp_labels,
             hovertemplate="%{customdata}<br>Equity=%{y:.2f}<extra></extra>",
         )
     )
     figure.update_layout(
-        template="plotly_white",
+        template="plotly_dark",
         height=220,
         margin={"l": 24, "r": 24, "t": 16, "b": 28},
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.88)",
+        plot_bgcolor="rgba(30,34,48,0.6)",
         dragmode=False,
         hovermode="x",
         showlegend=False,
-        font={"family": "Georgia, Times New Roman, serif", "color": "#1f2937"},
+        font={"family": "Inter, -apple-system, sans-serif", "color": "#e2e8f0", "size": 11},
     )
     figure.update_yaxes(
         tickformat=".2f",
         ticks="outside",
         automargin=True,
         fixedrange=True,
+        gridcolor="rgba(148, 163, 184, 0.08)",
     )
     figure.update_xaxes(
         showticklabels=True,
@@ -1505,6 +1642,7 @@ def _render_equity_chart(result: BacktestResult, display_bars: list[MarketBar]) 
         automargin=True,
         fixedrange=True,
         tickformat="%Y-%m-%d",
+        gridcolor="rgba(148, 163, 184, 0.08)",
     )
     return to_html(
         figure,

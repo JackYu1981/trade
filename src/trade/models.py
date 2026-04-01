@@ -100,6 +100,13 @@ class TrendLeg:
     duration_bars: int
     move_points: float
     is_tradeable: bool
+    body_start_index: int | None = None
+    body_start_time: datetime | None = None
+    body_start_price: float | None = None
+    body_end_index: int | None = None
+    body_end_time: datetime | None = None
+    body_end_price: float | None = None
+    body_move_points: float | None = None
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from trade.models import FishWindowConfig, LegCriteria, MarketBar, SwingPoint, TrendLeg
 
 
@@ -53,6 +55,9 @@ def tradeable_legs(bars: list[MarketBar], criteria: LegCriteria) -> list[TrendLe
     return [leg for leg in build_trend_legs(bars, criteria) if leg.is_tradeable]
 
 
+DEFAULT_BODY_SWING_WINDOW = 5
+
+
 def default_fish_window_config() -> FishWindowConfig:
     return FishWindowConfig(
         window_bars=200,
@@ -68,6 +73,8 @@ def default_fish_window_config() -> FishWindowConfig:
 def build_window_legs(
     bars: list[MarketBar],
     config: FishWindowConfig,
+    *,
+    body_swing_window: int | None = None,
 ) -> list[TrendLeg]:
     if not bars:
         return []
@@ -118,7 +125,13 @@ def build_window_legs(
         else:
             start_index += 1
 
-    return _deduplicate_window_legs(candidates)
+    deduped = _deduplicate_window_legs(candidates)
+    if body_swing_window is not None:
+        deduped = [
+            identify_fish_body(bars, leg, body_swing_window, config.point_size)
+            for leg in deduped
+        ]
+    return deduped
 
 
 def _build_leg(start: SwingPoint, end: SwingPoint, direction: str, criteria: LegCriteria) -> TrendLeg:
@@ -208,3 +221,54 @@ def _deduplicate_window_legs(legs: list[TrendLeg]) -> list[TrendLeg]:
         deduped.append(leg)
         seen.add(key)
     return deduped
+
+
+def identify_fish_body(
+    bars: list[MarketBar],
+    leg: TrendLeg,
+    swing_window: int,
+    point_size: float,
+) -> TrendLeg:
+    fish_bars = bars[leg.start_index : leg.end_index + 1]
+    swings = find_swing_points(fish_bars, window=swing_window)
+
+    if len(swings) < 2:
+        return replace(
+            leg,
+            body_start_index=leg.start_index,
+            body_start_time=leg.start_time,
+            body_start_price=leg.start_price,
+            body_end_index=leg.end_index,
+            body_end_time=leg.end_time,
+            body_end_price=leg.end_price,
+            body_move_points=leg.move_points,
+        )
+
+    offset = leg.start_index
+    best_move = 0.0
+    best_start: SwingPoint | None = None
+    best_end: SwingPoint | None = None
+
+    for left, right in zip(swings, swings[1:]):
+        if leg.direction == "up" and left.kind == "low" and right.kind == "high":
+            move = (right.price - left.price) / point_size if point_size else (right.price - left.price)
+            if move > best_move:
+                best_move, best_start, best_end = move, left, right
+        elif leg.direction == "down" and left.kind == "high" and right.kind == "low":
+            move = (left.price - right.price) / point_size if point_size else (left.price - right.price)
+            if move > best_move:
+                best_move, best_start, best_end = move, left, right
+
+    if best_start is None or best_end is None:
+        return leg
+
+    return replace(
+        leg,
+        body_start_index=best_start.bar_index + offset,
+        body_start_time=fish_bars[best_start.bar_index].timestamp,
+        body_start_price=best_start.price,
+        body_end_index=best_end.bar_index + offset,
+        body_end_time=fish_bars[best_end.bar_index].timestamp,
+        body_end_price=best_end.price,
+        body_move_points=best_move,
+    )

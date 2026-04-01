@@ -40,3 +40,15 @@
 - Updated text, JSON, and HTML reports to show strategy metadata and execution rules
 - Switched the CLI default strategy to `demo.single_position_ma_trend`
 - Verified strategy, pipeline, and reporting tests all pass after the framework changes
+
+## 2026-04-01
+
+- Added fish body (鱼身) identification within existing fish/trend legs
+- Extended `TrendLeg` with 7 optional `body_*` fields for body start/end/move
+- Implemented `identify_fish_body()` in `baseline.py` using swing-point analysis within each fish
+- When swing points are insufficient (monotonic fish), body defaults to the whole fish
+- Integrated body detection into `build_window_legs()` via optional `body_swing_window` parameter
+- Added `DEFAULT_BODY_SWING_WINDOW = 5` based on empirical testing across 1h (730d) and 15m (60d) EUR/USD data
+- Updated HTML report to render fish body as darker vrect overlay on existing fish background
+- Added 5 new tests for fish body: monotonic up, internal wave, insufficient swings, down fish, and None passthrough
+- All 44 tests pass (39 existing + 5 new)
